@@ -42,6 +42,8 @@ bun run test:live:op
 bun run test:live:all
 ```
 
+Config details are documented in `docs/walleterm-config.md` and the full annotated template `walleterm.example.toml`.
+
 If using 1Password refs (`op://...`), sign in first:
 
 ```bash

@@ -1,53 +1,105 @@
+# walleterm.example.toml
+#
+# Kitchen-sink reference template.
+#
+# Usage:
+# 1) copy to walleterm.toml
+# 2) fill real addresses/refs
+# 3) remove accounts/signers you do not use
+#
+# Quick bootstrap for 1Password defaults:
+#   bun run cli setup op --network testnet
+#   bun run cli setup op --network mainnet
+
 [app]
+# Required: default network name.
 default_network = "testnet"
+
+# Optional (default true): enforce strict on-chain checks.
 strict_onchain = true
-onchain_signer_mode = "subset" # or "exact"
+
+# Optional (default "subset"): subset | exact
+onchain_signer_mode = "subset"
+
+# Optional (default 30): auth signature ttl in seconds.
 default_ttl_seconds = 30
+
+# Optional (default 6): ledger-time assumption.
 assumed_ledger_time_seconds = 6
-default_submit_mode = "sign-only" # sign-only | channels
+
+# Optional (default "sign-only"): sign-only | channels
+default_submit_mode = "sign-only"
 
 [networks.testnet]
+# Required
 rpc_url = "https://soroban-rpc.testnet.stellar.gateway.fm"
 network_passphrase = "Test SDF Network ; September 2015"
+
+# Optional helpers
 indexer_url = "https://smart-account-indexer.sdf-ecosystem.workers.dev"
 channels_base_url = "https://channels.openzeppelin.com/testnet"
+
+# Optional: op:// ref OR direct key string.
 channels_api_key_ref = "op://Private/walleterm-testnet/channels_api_key"
-# Optional: only set if you intentionally store a non-default deployer seed.
-# If omitted, wallet create uses the smart-account-kit deterministic deployer.
+
+# Optional: only set if intentionally not using deterministic deployer.
 # deployer_secret_ref = "op://Private/walleterm-testnet/deployer_seed"
 
 [networks.mainnet]
+# Required
 rpc_url = "https://rpc.lightsail.network/"
 network_passphrase = "Public Global Stellar Network ; September 2015"
+
+# Optional helpers
 indexer_url = "https://smart-account-indexer-mainnet.sdf-ecosystem.workers.dev"
 channels_base_url = "https://channels.openzeppelin.com"
 channels_api_key_ref = "op://Private/walleterm-mainnet/channels_api_key"
-# Optional: only set if you intentionally store a non-default deployer seed.
+
+# Optional: only set if intentionally not using deterministic deployer.
 # deployer_secret_ref = "op://Private/walleterm-mainnet/deployer_seed"
 
+# -------------------------------------------------------------
+# Smart account aliases
+# -------------------------------------------------------------
+
 [smart_accounts.treasury_testnet]
+# Required: must match a [networks.<name>] key.
 network = "testnet"
+
+# Required: OZ smart account contract address.
 contract_id = "CTODOCHANGE1234567890"
+
+# Optional but recommended: expected account contract wasm hash.
 expected_wasm_hash = "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e"
 
+# Delegated signers (repeatable)
 [[smart_accounts.treasury_testnet.delegated_signers]]
 name = "delegate_1"
 address = "GTODOCHANGE1234567890"
-secret_ref = "op://walleterm-testnet/delegate-1/stellar-secret"
+# setup op default field example:
+secret_ref = "op://Private/walleterm-testnet/delegated_seed"
 enabled = true
 
+# Example second delegated signer in a separate item/field:
+# [[smart_accounts.treasury_testnet.delegated_signers]]
+# name = "delegate_2"
+# address = "G..."
+# secret_ref = "op://Private/walleterm-testnet-extra/delegated_seed"
+# enabled = true
+
+# External Ed25519 signers (repeatable)
 [[smart_accounts.treasury_testnet.external_signers]]
 name = "ops_1"
 verifier_contract_id = "CTODOED25519VERIFIER"
 public_key_hex = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
-secret_ref = "op://walleterm-testnet/signer-ops-1/stellar-secret"
+secret_ref = "op://Private/walleterm-testnet/external_ops_1_seed"
 enabled = true
 
 [[smart_accounts.treasury_testnet.external_signers]]
 name = "ops_2"
 verifier_contract_id = "CTODOED25519VERIFIER"
 public_key_hex = "4cb5abf6ad79fbf5abbccafcc269d85cd2651ed4b885b5869f241aedf0a5ba29"
-secret_ref = "op://walleterm-testnet/signer-ops-2/stellar-secret"
+secret_ref = "op://Private/walleterm-testnet/external_ops_2_seed"
 enabled = true
 
 [smart_accounts.treasury_mainnet]
@@ -58,12 +110,24 @@ expected_wasm_hash = "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec7
 [[smart_accounts.treasury_mainnet.delegated_signers]]
 name = "delegate_1"
 address = "GTODOCHANGE1234567890"
-secret_ref = "op://walleterm-mainnet/delegate-1/stellar-secret"
+secret_ref = "op://Private/walleterm-mainnet/delegated_seed"
 enabled = true
 
 [[smart_accounts.treasury_mainnet.external_signers]]
 name = "ops_1"
 verifier_contract_id = "CTODOED25519VERIFIER"
 public_key_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-secret_ref = "op://walleterm-mainnet/signer-ops-1/stellar-secret"
+secret_ref = "op://Private/walleterm-mainnet/external_ops_1_seed"
 enabled = true
+
+# -------------------------------------------------------------
+# Minimal valid config (for reference)
+# -------------------------------------------------------------
+# [app]
+# default_network = "testnet"
+#
+# [networks.testnet]
+# rpc_url = "https://soroban-rpc.testnet.stellar.gateway.fm"
+# network_passphrase = "Test SDF Network ; September 2015"
+#
+# [smart_accounts]

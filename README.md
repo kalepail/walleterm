@@ -112,6 +112,7 @@ bun run test:live:all
 
 ## Docs
 
+- TOML config reference: [docs/walleterm-config.md](/Users/kalepail/Desktop/walleterm/docs/walleterm-config.md)
 - CLI usage details: [docs/walleterm-cli.md](/Users/kalepail/Desktop/walleterm/docs/walleterm-cli.md)
 - Architecture and signing model: [docs/walleterm-architecture.md](/Users/kalepail/Desktop/walleterm/docs/walleterm-architecture.md)
 
