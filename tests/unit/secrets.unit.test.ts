@@ -1,0 +1,97 @@
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { SecretResolver } from "../../src/secrets.js";
+
+function makeOpScript(contents: string): { opBin: string; root: string } {
+  const root = mkdtempSync(join(tmpdir(), "walleterm-secrets-unit-"));
+  const opBin = join(root, "op");
+  writeFileSync(opBin, contents, "utf8");
+  chmodSync(opBin, 0o755);
+  return { opBin, root };
+}
+
+describe("secrets unit", () => {
+  it("resolves and caches op:// refs", async () => {
+    const countPath = join(mkdtempSync(join(tmpdir(), "walleterm-secrets-count-")), "count.txt");
+    writeFileSync(countPath, "0", "utf8");
+    const { opBin } = makeOpScript(`#!/usr/bin/env node
+const fs = require("node:fs");
+const ref = process.argv[3];
+const countPath = process.env.COUNT_PATH;
+const n = Number(fs.readFileSync(countPath, "utf8"));
+fs.writeFileSync(countPath, String(n + 1), "utf8");
+if (process.argv[2] === "read" && ref === "op://vault/item/field") {
+  process.stdout.write("secret-value");
+  process.exit(0);
+}
+process.exit(1);
+`);
+
+    process.env.COUNT_PATH = countPath;
+    const resolver = new SecretResolver(opBin);
+    expect(await resolver.resolve("op://vault/item/field")).toBe("secret-value");
+    expect(await resolver.resolve("op://vault/item/field")).toBe("secret-value");
+    expect(readFileSync(countPath, "utf8").trim()).toBe("1");
+    delete process.env.COUNT_PATH;
+  });
+
+  it("rejects non-op refs", async () => {
+    const resolver = new SecretResolver("op");
+    await expect(resolver.resolve("env://not-supported")).rejects.toThrow(/Only op:\/\//i);
+  });
+
+  it("surfaces op read failures", async () => {
+    const { opBin } = makeOpScript(`#!/usr/bin/env node
+process.stderr.write("boom");
+process.exit(1);
+`);
+    const resolver = new SecretResolver(opBin);
+    await expect(resolver.resolve("op://vault/item/field")).rejects.toThrow(
+      /Failed resolving 1Password ref/i,
+    );
+  });
+
+  it("rejects empty resolved values", async () => {
+    const { opBin } = makeOpScript(`#!/usr/bin/env node
+if (process.argv[2] === "read") {
+  process.stdout.write("   ");
+  process.exit(0);
+}
+process.exit(1);
+`);
+    const resolver = new SecretResolver(opBin);
+    await expect(resolver.resolve("op://vault/item/field")).rejects.toThrow(/empty value/i);
+  });
+
+  it("uses WALLETERM_OP_BIN when constructor arg is omitted", async () => {
+    const { opBin } = makeOpScript(`#!/usr/bin/env node
+if (process.argv[2] === "read" && process.argv[3] === "op://vault/item/field") {
+  process.stdout.write("secret-from-env");
+  process.exit(0);
+}
+process.exit(1);
+`);
+    const prev = process.env.WALLETERM_OP_BIN;
+    process.env.WALLETERM_OP_BIN = opBin;
+    try {
+      const resolver = new SecretResolver();
+      await expect(resolver.resolve("op://vault/item/field")).resolves.toBe("secret-from-env");
+    } finally {
+      if (prev === undefined) delete process.env.WALLETERM_OP_BIN;
+      else process.env.WALLETERM_OP_BIN = prev;
+    }
+  });
+
+  it("falls back to default op binary name when arg/env are unset", async () => {
+    const prev = process.env.WALLETERM_OP_BIN;
+    delete process.env.WALLETERM_OP_BIN;
+    try {
+      const resolver = new SecretResolver();
+      await expect(resolver.resolve("env://unsupported")).rejects.toThrow(/Only op:\/\//i);
+    } finally {
+      if (prev !== undefined) process.env.WALLETERM_OP_BIN = prev;
+    }
+  });
+});

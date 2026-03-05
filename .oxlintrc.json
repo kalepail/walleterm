@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "vitest"],
+  "categories": {
+    "correctness": "error"
+  },
+  "settings": {
+    "vitest": {
+      "typecheck": false
+    }
+  },
+  "ignorePatterns": ["node_modules/**", "dist/**", "coverage/**", "coverage-c8/**"]
+}

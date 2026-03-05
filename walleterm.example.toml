@@ -1,0 +1,69 @@
+[app]
+default_network = "testnet"
+strict_onchain = true
+onchain_signer_mode = "subset" # or "exact"
+default_ttl_seconds = 30
+assumed_ledger_time_seconds = 6
+default_submit_mode = "sign-only" # sign-only | channels
+
+[networks.testnet]
+rpc_url = "https://soroban-rpc.testnet.stellar.gateway.fm"
+network_passphrase = "Test SDF Network ; September 2015"
+indexer_url = "https://smart-account-indexer.sdf-ecosystem.workers.dev"
+channels_base_url = "https://channels.openzeppelin.com/testnet"
+channels_api_key_ref = "op://Private/walleterm-testnet/channels_api_key"
+# Optional: only set if you intentionally store a non-default deployer seed.
+# If omitted, wallet create uses the smart-account-kit deterministic deployer.
+# deployer_secret_ref = "op://Private/walleterm-testnet/deployer_seed"
+
+[networks.mainnet]
+rpc_url = "https://rpc.lightsail.network/"
+network_passphrase = "Public Global Stellar Network ; September 2015"
+indexer_url = "https://smart-account-indexer-mainnet.sdf-ecosystem.workers.dev"
+channels_base_url = "https://channels.openzeppelin.com"
+channels_api_key_ref = "op://Private/walleterm-mainnet/channels_api_key"
+# Optional: only set if you intentionally store a non-default deployer seed.
+# deployer_secret_ref = "op://Private/walleterm-mainnet/deployer_seed"
+
+[smart_accounts.treasury_testnet]
+network = "testnet"
+contract_id = "CTODOCHANGE1234567890"
+expected_wasm_hash = "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e"
+
+[[smart_accounts.treasury_testnet.delegated_signers]]
+name = "delegate_1"
+address = "GTODOCHANGE1234567890"
+secret_ref = "op://walleterm-testnet/delegate-1/stellar-secret"
+enabled = true
+
+[[smart_accounts.treasury_testnet.external_signers]]
+name = "ops_1"
+verifier_contract_id = "CTODOED25519VERIFIER"
+public_key_hex = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+secret_ref = "op://walleterm-testnet/signer-ops-1/stellar-secret"
+enabled = true
+
+[[smart_accounts.treasury_testnet.external_signers]]
+name = "ops_2"
+verifier_contract_id = "CTODOED25519VERIFIER"
+public_key_hex = "4cb5abf6ad79fbf5abbccafcc269d85cd2651ed4b885b5869f241aedf0a5ba29"
+secret_ref = "op://walleterm-testnet/signer-ops-2/stellar-secret"
+enabled = true
+
+[smart_accounts.treasury_mainnet]
+network = "mainnet"
+contract_id = "CTODOCHANGE1234567890"
+expected_wasm_hash = "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e"
+
+[[smart_accounts.treasury_mainnet.delegated_signers]]
+name = "delegate_1"
+address = "GTODOCHANGE1234567890"
+secret_ref = "op://walleterm-mainnet/delegate-1/stellar-secret"
+enabled = true
+
+[[smart_accounts.treasury_mainnet.external_signers]]
+name = "ops_1"
+verifier_contract_id = "CTODOED25519VERIFIER"
+public_key_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+secret_ref = "op://walleterm-mainnet/signer-ops-1/stellar-secret"
+enabled = true
