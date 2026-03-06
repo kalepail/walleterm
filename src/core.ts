@@ -213,17 +213,6 @@ export async function loadRuntimeSigners(
   };
 }
 
-export async function verifySignerSecrets(
-  accountRef: { alias: string; account: SmartAccountConfig },
-  resolver: SecretResolver,
-): Promise<{ ok: boolean; verified: number }> {
-  const runtime = await loadRuntimeSigners(accountRef, resolver);
-  return {
-    ok: true,
-    verified: runtime.external.length + runtime.delegated.length,
-  };
-}
-
 export function listSignerConfig(accountRef: { alias: string; account: SmartAccountConfig }): {
   account: string;
   external: Array<{

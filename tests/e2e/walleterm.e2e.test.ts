@@ -213,21 +213,20 @@ async function runCli(fx: Fixture, args: string[]) {
 }
 
 describe("walleterm e2e", () => {
-  it("verifies configured signer secrets from 1Password refs", async () => {
+  it("rejects removed wallet signer verify command", async () => {
     const fx = makeFixture();
 
-    const res = await runCli(fx, [
-      "keys",
-      "verify",
-      "--config",
-      fx.configPath,
-      "--account",
-      "treasury",
-    ]);
-
-    const report = JSON.parse(res.stdout);
-    expect(report.ok).toBe(true);
-    expect(report.verified).toBe(2);
+    await expect(
+      runCli(fx, [
+        "wallet",
+        "signer",
+        "verify",
+        "--config",
+        fx.configPath,
+        "--account",
+        "treasury",
+      ]),
+    ).rejects.toThrow(/unknown command/i);
   });
 
   it("signs a standalone delegated auth entry", async () => {
@@ -414,7 +413,7 @@ describe("walleterm e2e", () => {
     expect(signedTx.signatures.length).toBe(1);
   });
 
-  it("reports signability with can-sign", async () => {
+  it("reviews a payload with signability details", async () => {
     const fx = makeFixture();
     const smartAuth = makeSmartAccountEntry(
       fx.contractId,
@@ -433,7 +432,7 @@ describe("walleterm e2e", () => {
     );
 
     const res = await runCli(fx, [
-      "can-sign",
+      "review",
       "--config",
       fx.configPath,
       "--network",
@@ -445,7 +444,9 @@ describe("walleterm e2e", () => {
     ]);
 
     const report = JSON.parse(res.stdout);
-    expect(report.kind).toBe("bundle");
-    expect(report.signableAuthEntries).toBeGreaterThanOrEqual(1);
+    expect(report.inspection.kind).toBe("bundle");
+    expect(report.signability.kind).toBe("bundle");
+    expect(report.signability.signableAuthEntries).toBeGreaterThanOrEqual(1);
+    expect(report.account).toBe("treasury");
   });
 });

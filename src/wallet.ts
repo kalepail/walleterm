@@ -30,6 +30,12 @@ export interface AddressLookupResponse {
   count: number;
 }
 
+export interface CredentialLookupResponse {
+  credentialId: string;
+  contracts: IndexerContractSummary[];
+  count: number;
+}
+
 export interface ContractSignerRow {
   context_rule_id: number;
   signer_type: "External" | "Delegated" | "Native";
@@ -112,6 +118,15 @@ export async function discoverContractsByAddress(
 ): Promise<AddressLookupResponse> {
   return fetchJson<AddressLookupResponse>(
     `${indexerUrl.replace(/\/$/, "")}/api/lookup/address/${encodeURIComponent(address)}`,
+  );
+}
+
+export async function discoverContractsByCredentialId(
+  indexerUrl: string,
+  credentialId: string,
+): Promise<CredentialLookupResponse> {
+  return fetchJson<CredentialLookupResponse>(
+    `${indexerUrl.replace(/\/$/, "")}/api/lookup/${encodeURIComponent(credentialId)}`,
   );
 }
 

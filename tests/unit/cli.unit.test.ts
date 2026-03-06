@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Keypair, Networks } from "@stellar/stellar-sdk";
+import { Keypair, Networks, StrKey } from "@stellar/stellar-sdk";
 import { Command } from "commander";
 
 const mocks = vi.hoisted(() => ({
@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
   mockParseInputFile: vi.fn(),
   mockResolveAccountForCommand: vi.fn(),
   mockSignInput: vi.fn(),
-  mockVerifySignerSecrets: vi.fn(),
   mockWriteOutput: vi.fn(),
   mockLoadConfig: vi.fn(),
   mockResolveNetwork: vi.fn(),
@@ -21,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   mockSubmitViaChannels: vi.fn(),
   mockBuildSignerMutationBundle: vi.fn(),
   mockCreateWalletDeployTx: vi.fn(),
+  mockDiscoverContractsByCredentialId: vi.fn(),
   mockDeriveSaltHexFromRawString: vi.fn(),
   mockDiscoverContractsByAddress: vi.fn(),
   mockListContractSigners: vi.fn(),
@@ -40,7 +40,6 @@ const {
   mockParseInputFile,
   mockResolveAccountForCommand,
   mockSignInput,
-  mockVerifySignerSecrets,
   mockLoadConfig,
   mockResolveNetwork,
   mockDefaultItemForNetwork,
@@ -49,6 +48,7 @@ const {
   mockSubmitViaChannels,
   mockBuildSignerMutationBundle,
   mockCreateWalletDeployTx,
+  mockDiscoverContractsByCredentialId,
   mockDeriveSaltHexFromRawString,
   mockDiscoverContractsByAddress,
   mockListContractSigners,
@@ -68,7 +68,6 @@ vi.mock("../../src/core.js", () => ({
   parseInputFile: mocks.mockParseInputFile,
   resolveAccountForCommand: mocks.mockResolveAccountForCommand,
   signInput: mocks.mockSignInput,
-  verifySignerSecrets: mocks.mockVerifySignerSecrets,
   writeOutput: mocks.mockWriteOutput,
 }));
 
@@ -90,6 +89,7 @@ vi.mock("../../src/submit.js", () => ({
 vi.mock("../../src/wallet.js", () => ({
   buildSignerMutationBundle: mocks.mockBuildSignerMutationBundle,
   createWalletDeployTx: mocks.mockCreateWalletDeployTx,
+  discoverContractsByCredentialId: mocks.mockDiscoverContractsByCredentialId,
   deriveSaltHexFromRawString: mocks.mockDeriveSaltHexFromRawString,
   discoverContractsByAddress: mocks.mockDiscoverContractsByAddress,
   listContractSigners: mocks.mockListContractSigners,
@@ -215,7 +215,6 @@ beforeEach(() => {
   mockParseInputFile.mockReturnValue({ kind: "bundle", auth: [] });
   mockInspectInput.mockReturnValue({ kind: "tx" });
   mockCanSignInput.mockReturnValue({ kind: "bundle", signableAuthEntries: 0 });
-  mockVerifySignerSecrets.mockResolvedValue({ ok: true, verified: 2 });
   mockListSignerConfig.mockReturnValue({ account: "treasury", external: [], delegated: [] });
 
   mockDefaultItemForNetwork.mockReturnValue("walleterm-testnet");
@@ -243,6 +242,7 @@ beforeEach(() => {
   mockMakeExternalSignerScVal.mockReturnValue({ type: "external-scv" });
   mockBuildSignerMutationBundle.mockReturnValue({ kind: "bundle", auth: [] });
   mockResolveIndexerUrl.mockReturnValue("https://indexer.invalid");
+  mockDiscoverContractsByCredentialId.mockResolvedValue({ count: 0, contracts: [] });
   mockDiscoverContractsByAddress.mockResolvedValue({ count: 0, contracts: [] });
   mockListContractSigners.mockResolvedValue({ contractId: CONTRACT_ID, signers: [] });
   mockCreateWalletDeployTx.mockResolvedValue({
@@ -283,17 +283,36 @@ describe("cli unit", () => {
     });
   });
 
-  it("runs inspect command", async () => {
-    mockParseInputFile.mockReturnValue({ kind: "tx", envelope: { toXDR: () => "AAA" } });
-    mockInspectInput.mockReturnValue({ kind: "tx", operations: 1 });
+  it("runs review command with signability details", async () => {
+    mockParseInputFile.mockReturnValue({ kind: "bundle", auth: [] });
+    mockInspectInput.mockReturnValue({ kind: "bundle", operations: 1 });
+    mockCanSignInput.mockReturnValue({ kind: "bundle", signableAuthEntries: 2 });
 
-    const res = await run(["inspect", "--in", "in.txt"]);
-    expect(JSON.parse(res.stdout)).toMatchObject({ kind: "tx", operations: 1 });
+    const res = await run(["review", "--in", "in.txt", "--account", "treasury"]);
+    expect(JSON.parse(res.stdout)).toMatchObject({
+      inspection: { kind: "bundle", operations: 1 },
+      signability: { kind: "bundle", signableAuthEntries: 2 },
+      account: "treasury",
+      contract_id: CONTRACT_ID,
+    });
+  });
+
+  it("review command falls back to inspection-only output when no account resolves", async () => {
+    mockParseInputFile.mockReturnValue({ kind: "bundle", auth: [] });
+    mockInspectInput.mockReturnValue({ kind: "bundle", operations: 1 });
+    mockResolveAccountForCommand.mockReturnValue(null);
+
+    const res = await run(["review", "--in", "in.txt"]);
+    expect(JSON.parse(res.stdout)).toMatchObject({
+      inspection: { kind: "bundle", operations: 1 },
+      signability: null,
+      account: null,
+    });
   });
 
   it("runCli stringifies non-Error parse failures", async () => {
     vi.spyOn(Command.prototype, "parseAsync").mockRejectedValueOnce("plain-failure");
-    await expect(run(["inspect", "--in", "in.txt"])).rejects.toThrow(/plain-failure/i);
+    await expect(run(["review", "--in", "in.txt"])).rejects.toThrow(/plain-failure/i);
   });
 
   it("sign command errors when account cannot be resolved", async () => {
@@ -379,35 +398,24 @@ describe("cli unit", () => {
     );
   });
 
-  it("keys list command outputs signer config", async () => {
-    mockListSignerConfig.mockReturnValue({
-      account: "treasury",
-      external: [{ name: "ext" }],
-      delegated: [{ name: "del" }],
-    });
-
-    const res = await run(["keys", "list", "--account", "treasury"]);
-    expect(JSON.parse(res.stdout)).toMatchObject({ account: "treasury" });
+  it("wallet signer generate outputs a valid keypair", async () => {
+    const res = await run(["wallet", "signer", "generate"]);
+    const out = JSON.parse(res.stdout);
+    const kp = Keypair.fromSecret(out.secret_seed);
+    expect(out.public_key).toBe(kp.publicKey());
+    expect(out.public_key_hex).toBe(Buffer.from(kp.rawPublicKey()).toString("hex"));
   });
 
-  it("keys commands fail when account alias is missing in config", async () => {
-    mockLoadConfig.mockReturnValue({
-      app: { default_network: "testnet", default_ttl_seconds: 30, assumed_ledger_time_seconds: 6 },
-      networks: {
-        testnet: { rpc_url: "https://rpc.invalid", network_passphrase: Networks.TESTNET },
-      },
-      smart_accounts: {},
-    });
-
-    await expect(run(["keys", "list", "--account", "treasury"])).rejects.toThrow(
-      /Smart account 'treasury' not found/i,
+  it("wallet lookup requires exactly one selector", async () => {
+    await expect(run(["wallet", "lookup"])).rejects.toThrow(
+      /Pass exactly one of --account, --address, --contract-id, or --secret-ref/i,
     );
-    await expect(run(["keys", "verify", "--account", "treasury"])).rejects.toThrow(
-      /Smart account 'treasury' not found/i,
-    );
+    await expect(
+      run(["wallet", "lookup", "--account", "treasury", "--address", "GABC"]),
+    ).rejects.toThrow(/Pass exactly one of --account, --address, --contract-id, or --secret-ref/i);
   });
 
-  it("wallet reconcile computes local/onchain deltas", async () => {
+  it("wallet lookup returns configured and onchain signers for an account alias", async () => {
     mockListSignerConfig.mockReturnValue({
       account: "treasury",
       delegated: [{ name: "del", address: "GDEL", secret_ref: "op://d" }],
@@ -422,44 +430,22 @@ describe("cli unit", () => {
     });
     mockListContractSigners.mockResolvedValue({
       contractId: CONTRACT_ID,
-      signers: [
-        { signer_type: "Delegated", signer_address: "GDEL" },
-        { signer_type: "External", signer_address: "CVER", credential_id: "aa" },
-        { signer_type: "Delegated", signer_address: "GONCHAIN" },
-      ],
+      signers: [{ signer_type: "Delegated", signer_address: "GDEL", credential_id: null }],
     });
 
-    const res = await run(["wallet", "reconcile", "--account", "treasury"]);
+    const res = await run(["wallet", "lookup", "--account", "treasury"]);
     const out = JSON.parse(res.stdout);
-    expect(out.matched).toContain("Delegated|GDEL");
-    expect(out.only_onchain).toContain("Delegated|GONCHAIN");
+    expect(out).toMatchObject({
+      mode: "account",
+      query: { account: "treasury" },
+      count: 1,
+    });
+    expect(out.wallets[0].contract_id).toBe(CONTRACT_ID);
+    expect(out.wallets[0].configured_signers.account).toBe("treasury");
+    expect(out.wallets[0].onchain_signers).toHaveLength(1);
   });
 
-  it("wallet reconcile ignores incomplete external signer rows from indexer", async () => {
-    mockListSignerConfig.mockReturnValue({
-      account: "treasury",
-      delegated: [],
-      external: [
-        {
-          name: "ext",
-          verifier_contract_id: "CVER",
-          public_key_hex: "aa",
-          secret_ref: "op://e",
-        },
-      ],
-    });
-    mockListContractSigners.mockResolvedValue({
-      contractId: CONTRACT_ID,
-      signers: [{ signer_type: "External", signer_address: "CVER", credential_id: null }],
-    });
-
-    const res = await run(["wallet", "reconcile", "--account", "treasury"]);
-    const out = JSON.parse(res.stdout);
-    expect(out.only_local).toContain("External|CVER|aa");
-    expect(out.matched).not.toContain("External|CVER|aa");
-  });
-
-  it("wallet reconcile fails when account is absent", async () => {
+  it("wallet lookup fails when account alias is absent", async () => {
     mockLoadConfig.mockReturnValue({
       app: { default_network: "testnet", default_ttl_seconds: 30, assumed_ledger_time_seconds: 6 },
       networks: {
@@ -467,12 +453,13 @@ describe("cli unit", () => {
       },
       smart_accounts: {},
     });
-    await expect(run(["wallet", "reconcile", "--account", "treasury"])).rejects.toThrow(
+
+    await expect(run(["wallet", "lookup", "--account", "treasury"])).rejects.toThrow(
       /Smart account 'treasury' not found/i,
     );
   });
 
-  it("wallet reconcile and signer mutation enforce account/network constraints", async () => {
+  it("wallet lookup enforces account network match", async () => {
     mockLoadConfig.mockReturnValue({
       app: { default_network: "testnet", default_ttl_seconds: 30, assumed_ledger_time_seconds: 6 },
       networks: {
@@ -488,14 +475,118 @@ describe("cli unit", () => {
       },
     });
 
-    await expect(run(["wallet", "reconcile", "--account", "treasury"])).rejects.toThrow(
+    await expect(run(["wallet", "lookup", "--account", "treasury"])).rejects.toThrow(
       /belongs to network 'mainnet', not 'testnet'/i,
     );
+  });
+
+  it("wallet lookup lists onchain signers for a contract address", async () => {
+    mockListContractSigners.mockResolvedValue({
+      contractId: CONTRACT_ID,
+      signers: [{ signer_type: "Delegated", signer_address: "GDEL", credential_id: null }],
+    });
+
+    const res = await run(["wallet", "lookup", "--address", CONTRACT_ID]);
+    const out = JSON.parse(res.stdout);
+    expect(out).toMatchObject({
+      mode: "contract",
+      query: { contract_id: CONTRACT_ID },
+      count: 1,
+    });
+    expect(out.wallets[0].onchain_signers).toHaveLength(1);
+  });
+
+  it("wallet lookup discovers contracts from a delegated address", async () => {
+    mockDiscoverContractsByAddress.mockResolvedValue({
+      count: 1,
+      contracts: [{ contract_id: CONTRACT_ID }],
+    });
+    mockListContractSigners.mockResolvedValue({
+      contractId: CONTRACT_ID,
+      signers: [{ signer_type: "Delegated", signer_address: "GDEL", credential_id: null }],
+    });
+
+    const res = await run(["wallet", "lookup", "--address", "GDEL"]);
+    const out = JSON.parse(res.stdout);
+    expect(out).toMatchObject({
+      mode: "address",
+      query: { address: "GDEL" },
+      count: 1,
+    });
+    expect(out.wallets[0].contract_id).toBe(CONTRACT_ID);
+    expect(out.wallets[0].onchain_signers).toHaveLength(1);
+    expect(out.wallets[0].lookup_types).toEqual(["delegated"]);
+  });
+
+  it("wallet lookup resolves a secret ref and merges delegated and external reverse lookups", async () => {
+    const signer = Keypair.random();
+    const externalOnly = StrKey.encodeContract(Buffer.alloc(32, 2));
+    mockSecretResolve.mockResolvedValueOnce(signer.secret());
+    mockDiscoverContractsByAddress.mockResolvedValueOnce({
+      count: 1,
+      contracts: [{ contract_id: CONTRACT_ID }],
+    });
+    mockDiscoverContractsByCredentialId.mockResolvedValueOnce({
+      count: 2,
+      contracts: [{ contract_id: CONTRACT_ID }, { contract_id: externalOnly }],
+    });
+    mockListContractSigners
+      .mockResolvedValueOnce({
+        contractId: CONTRACT_ID,
+        signers: [
+          { signer_type: "Delegated", signer_address: signer.publicKey(), credential_id: null },
+        ],
+      })
+      .mockResolvedValueOnce({
+        contractId: externalOnly,
+        signers: [{ signer_type: "External", signer_address: "CVER", credential_id: "aa" }],
+      });
+
+    const res = await run(["wallet", "lookup", "--secret-ref", "op://vault/item/field"]);
+    const out = JSON.parse(res.stdout);
+    expect(out).toMatchObject({
+      mode: "secret-ref",
+      query: {
+        secret_ref: "op://vault/item/field",
+        derived_address: signer.publicKey(),
+        credential_id: Buffer.from(signer.rawPublicKey()).toString("hex"),
+      },
+      count: 2,
+    });
+    expect(out.wallets[0].lookup_types.length).toBeGreaterThanOrEqual(1);
+    expect(out.wallets.map((row: { contract_id: string }) => row.contract_id)).toEqual(
+      expect.arrayContaining([CONTRACT_ID, externalOnly]),
+    );
+  });
+
+  it("wallet lookup rejects secret refs that do not resolve to Stellar seeds", async () => {
+    mockSecretResolve.mockResolvedValueOnce("not-a-seed");
+    await expect(
+      run(["wallet", "lookup", "--secret-ref", "op://vault/item/field"]),
+    ).rejects.toThrow(/secret-ref must resolve to a valid Stellar secret seed/i);
+  });
+
+  it("wallet signer mutation enforces account/network constraints", async () => {
+    mockLoadConfig.mockReturnValue({
+      app: { default_network: "testnet", default_ttl_seconds: 30, assumed_ledger_time_seconds: 6 },
+      networks: {
+        testnet: { rpc_url: "https://rpc.invalid", network_passphrase: Networks.TESTNET },
+      },
+      smart_accounts: {
+        treasury: {
+          network: "mainnet",
+          contract_id: CONTRACT_ID,
+          external_signers: [],
+          delegated_signers: [],
+        },
+      },
+    });
 
     await expect(
       run([
         "wallet",
-        "add-delegated-signer",
+        "signer",
+        "add",
         "--account",
         "treasury",
         "--context-rule-id",
@@ -520,7 +611,8 @@ describe("cli unit", () => {
     await expect(
       run([
         "wallet",
-        "add-delegated-signer",
+        "signer",
+        "add",
         "--account",
         "missing",
         "--context-rule-id",
@@ -536,7 +628,8 @@ describe("cli unit", () => {
   it("runs remove signer commands", async () => {
     await run([
       "wallet",
-      "remove-delegated-signer",
+      "signer",
+      "remove",
       "--account",
       "treasury",
       "--context-rule-id",
@@ -552,7 +645,8 @@ describe("cli unit", () => {
     const ext = Keypair.random();
     await run([
       "wallet",
-      "remove-external-ed25519-signer",
+      "signer",
+      "remove",
       "--account",
       "treasury",
       "--context-rule-id",
@@ -568,6 +662,204 @@ describe("cli unit", () => {
     ]);
 
     expect(mockBuildSignerMutationBundle).toHaveBeenCalledTimes(2);
+  });
+
+  it("wallet signer add resolves delegated signer identity from secret-ref", async () => {
+    const signer = Keypair.random();
+    mockSecretResolve.mockResolvedValueOnce(signer.secret());
+
+    await run([
+      "wallet",
+      "signer",
+      "add",
+      "--account",
+      "treasury",
+      "--context-rule-id",
+      "0",
+      "--secret-ref",
+      "op://vault/item/delegated_seed",
+      "--out",
+      "out.json",
+    ]);
+
+    expect(mockMakeDelegatedSignerScVal).toHaveBeenCalledWith(signer.publicKey());
+    expect(mockBuildSignerMutationBundle).toHaveBeenCalledTimes(1);
+  });
+
+  it("wallet signer add resolves external signer identity from secret-ref plus verifier", async () => {
+    const signer = Keypair.random();
+    mockSecretResolve.mockResolvedValueOnce(signer.secret());
+
+    await run([
+      "wallet",
+      "signer",
+      "add",
+      "--account",
+      "treasury",
+      "--context-rule-id",
+      "0",
+      "--secret-ref",
+      "op://vault/item/external_seed",
+      "--verifier-contract-id",
+      CONTRACT_ID,
+      "--out",
+      "out.json",
+    ]);
+
+    expect(mockMakeExternalSignerScVal).toHaveBeenCalledWith(
+      CONTRACT_ID,
+      Buffer.from(signer.rawPublicKey()).toString("hex"),
+    );
+  });
+
+  it("wallet signer remove supports direct external parameters", async () => {
+    const ext = Keypair.random();
+    await run([
+      "wallet",
+      "signer",
+      "remove",
+      "--account",
+      "treasury",
+      "--context-rule-id",
+      "0",
+      "--verifier-contract-id",
+      CONTRACT_ID,
+      "--public-key-hex",
+      Buffer.from(ext.rawPublicKey()).toString("hex"),
+      "--out",
+      "out.json",
+    ]);
+
+    expect(mockMakeExternalSignerScVal).toHaveBeenCalledWith(
+      CONTRACT_ID,
+      Buffer.from(ext.rawPublicKey()).toString("hex"),
+    );
+  });
+
+  it("wallet signer add defaults context-rule-id to 0", async () => {
+    const signer = Keypair.random();
+
+    const res = await run([
+      "wallet",
+      "signer",
+      "add",
+      "--account",
+      "treasury",
+      "--delegated-address",
+      signer.publicKey(),
+      "--out",
+      "out.json",
+    ]);
+
+    expect(mockBuildSignerMutationBundle).toHaveBeenCalledWith(
+      CONTRACT_ID,
+      "add_signer",
+      0,
+      expect.any(Object),
+      999,
+    );
+    expect(JSON.parse(res.stdout)).toMatchObject({ context_rule_id: 0 });
+  });
+
+  it("wallet signer add validates signer target shapes", async () => {
+    await expect(
+      run([
+        "wallet",
+        "signer",
+        "add",
+        "--account",
+        "treasury",
+        "--context-rule-id",
+        "0",
+        "--secret-ref",
+        "op://vault/item/seed",
+        "--delegated-address",
+        Keypair.random().publicKey(),
+        "--out",
+        "out.json",
+      ]),
+    ).rejects.toThrow(/Use either --secret-ref or direct signer identity flags/i);
+
+    await expect(
+      run([
+        "wallet",
+        "signer",
+        "add",
+        "--account",
+        "treasury",
+        "--context-rule-id",
+        "0",
+        "--public-key-hex",
+        Buffer.from(Keypair.random().rawPublicKey()).toString("hex"),
+        "--out",
+        "out.json",
+      ]),
+    ).rejects.toThrow(/require --verifier-contract-id/i);
+
+    await expect(
+      run([
+        "wallet",
+        "signer",
+        "add",
+        "--account",
+        "treasury",
+        "--context-rule-id",
+        "0",
+        "--delegated-address",
+        Keypair.random().publicKey(),
+        "--verifier-contract-id",
+        CONTRACT_ID,
+        "--out",
+        "out.json",
+      ]),
+    ).rejects.toThrow(/accept only --delegated-address/i);
+
+    await expect(
+      run([
+        "wallet",
+        "signer",
+        "add",
+        "--account",
+        "treasury",
+        "--context-rule-id",
+        "0",
+        "--verifier-contract-id",
+        CONTRACT_ID,
+        "--out",
+        "out.json",
+      ]),
+    ).rejects.toThrow(/require either --public-key-hex or --secret-ref/i);
+
+    mockSecretResolve.mockResolvedValueOnce("not-a-seed");
+    await expect(
+      run([
+        "wallet",
+        "signer",
+        "add",
+        "--account",
+        "treasury",
+        "--context-rule-id",
+        "0",
+        "--secret-ref",
+        "op://vault/item/bad_seed",
+        "--out",
+        "out.json",
+      ]),
+    ).rejects.toThrow(/must resolve to a valid Stellar secret seed/i);
+
+    await expect(
+      run([
+        "wallet",
+        "signer",
+        "add",
+        "--account",
+        "treasury",
+        "--context-rule-id",
+        "0",
+        "--out",
+        "out.json",
+      ]),
+    ).rejects.toThrow(/Pass a signer target using --secret-ref/i);
   });
 
   it("uses ttl/ledger hard defaults when app defaults are absent", async () => {
@@ -602,7 +894,8 @@ describe("cli unit", () => {
 
     await run([
       "wallet",
-      "remove-delegated-signer",
+      "signer",
+      "remove",
       "--account",
       "treasury",
       "--context-rule-id",
@@ -618,6 +911,36 @@ describe("cli unit", () => {
       6,
       undefined,
     );
+  });
+
+  it("removed legacy commands are rejected", async () => {
+    await expect(run(["inspect", "--in", "in.txt"])).rejects.toThrow(/unknown command/i);
+    await expect(run(["can-sign", "--in", "in.txt"])).rejects.toThrow(/unknown command/i);
+    await expect(run(["keys", "create"])).rejects.toThrow(/unknown command/i);
+    await expect(run(["wallet", "discover", "--address", "GABC"])).rejects.toThrow(
+      /unknown command/i,
+    );
+    await expect(run(["wallet", "list-signers", "--contract-id", CONTRACT_ID])).rejects.toThrow(
+      /unknown command/i,
+    );
+    await expect(run(["wallet", "reconcile", "--account", "treasury"])).rejects.toThrow(
+      /unknown command/i,
+    );
+    await expect(run(["wallet", "signer", "verify", "--account", "treasury"])).rejects.toThrow(
+      /unknown command/i,
+    );
+    await expect(
+      run([
+        "wallet",
+        "add-delegated-signer",
+        "--account",
+        "treasury",
+        "--delegated-address",
+        Keypair.random().publicKey(),
+        "--out",
+        "out.json",
+      ]),
+    ).rejects.toThrow(/unknown command/i);
   });
 
   it("wallet create validates incompatible options and invalid signer tuples", async () => {

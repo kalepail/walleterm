@@ -877,6 +877,45 @@ describe("core unit", () => {
     expect(signed.report.summary.signed).toBeGreaterThanOrEqual(2);
   });
 
+  it("signInput on tx skips non-Soroban operations and still signs envelope signatures", () => {
+    const source = Keypair.random();
+    const txEnvelope = makeTxEnvelope([Operation.bumpSequence({ bumpTo: "2" })], source);
+
+    const runtime = makeRuntimeSigners({
+      delegated: [{ kind: "delegated", name: "src", address: source.publicKey(), keypair: source }],
+    });
+
+    const signed = signInput(
+      { kind: "tx", envelope: txEnvelope },
+      makeContext({ runtimeSigners: runtime, accountRef: null }),
+    );
+
+    expect(signed.report.summary.signed).toBe(1);
+    expect(signed.report.details[0]?.target).toBe(`tx:${source.publicKey()}`);
+  });
+
+  it("inspectInput and canSignInput handle tx envelopes with no Soroban operations", () => {
+    const source = Keypair.random();
+    const txEnvelope = makeTxEnvelope([Operation.bumpSequence({ bumpTo: "2" })], source);
+    const runtime = makeRuntimeSigners({
+      delegated: [{ kind: "delegated", name: "src", address: source.publicKey(), keypair: source }],
+    });
+
+    const inspected = inspectInput({ kind: "tx", envelope: txEnvelope });
+    expect(inspected).toMatchObject({
+      kind: "tx",
+      operations: 1,
+      authEntries: 0,
+    });
+
+    const can = canSignInput(
+      { kind: "tx", envelope: txEnvelope },
+      makeContext({ runtimeSigners: runtime, accountRef: null }),
+    ) as { signableEnvelopeSigners: string[]; signableAuthEntries: number };
+    expect(can.signableEnvelopeSigners).toContain(source.publicKey());
+    expect(can.signableAuthEntries).toBe(0);
+  });
+
   it("canSignInput handles fee-bump envelopes and inner transaction address collection", () => {
     const innerSource = Keypair.random();
     const feeSource = Keypair.random();

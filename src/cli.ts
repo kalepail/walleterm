@@ -10,7 +10,6 @@ import {
   parseInputFile,
   resolveAccountForCommand,
   signInput,
-  verifySignerSecrets,
   writeOutput,
 } from "./core.js";
 import { loadConfig, resolveNetwork } from "./config.js";
@@ -20,8 +19,10 @@ import { submitTxXdrViaRpc, submitViaChannels, type SubmitNetworkOverrides } fro
 import {
   buildSignerMutationBundle,
   createWalletDeployTx,
+  discoverContractsByCredentialId,
   deriveSaltHexFromRawString,
   discoverContractsByAddress,
+  type IndexerContractSummary,
   listContractSigners,
   makeDelegatedSignerScVal,
   makeExternalSignerScVal,
@@ -49,6 +50,7 @@ interface WalletLookupOpts extends BaseOpts {
   indexerUrl?: string;
   address?: string;
   contractId?: string;
+  secretRef?: string;
 }
 
 interface WalletMutationOpts extends BaseOpts {
@@ -57,6 +59,7 @@ interface WalletMutationOpts extends BaseOpts {
   ttlSeconds?: string;
   latestLedger?: string;
   delegatedAddress?: string;
+  secretRef?: string;
   verifierContractId?: string;
   publicKeyHex?: string;
 }
@@ -142,6 +145,132 @@ function getSubmitOverrides(opts: {
   };
 }
 
+function dedupeContractsById(contracts: IndexerContractSummary[]): IndexerContractSummary[] {
+  const byId = new Map<string, IndexerContractSummary>();
+  for (const contract of contracts) {
+    byId.set(contract.contract_id, contract);
+  }
+  return [...byId.values()];
+}
+
+function credentialIdFromKeypair(keypair: Keypair): string {
+  return Buffer.from(keypair.rawPublicKey()).toString("hex");
+}
+
+function buildKeypairJson(keypair: Keypair): Record<string, string> {
+  return {
+    secret_seed: keypair.secret(),
+    public_key: keypair.publicKey(),
+    public_key_hex: credentialIdFromKeypair(keypair),
+  };
+}
+
+async function enrichContractsWithOnchainSigners(
+  indexerUrl: string,
+  contracts: Array<
+    IndexerContractSummary & {
+      lookup_types?: string[];
+    }
+  >,
+): Promise<
+  Array<IndexerContractSummary & { lookup_types?: string[]; onchain_signers: unknown[] }>
+> {
+  return Promise.all(
+    contracts.map(async (contract) => ({
+      ...contract,
+      onchain_signers: (await listContractSigners(indexerUrl, contract.contract_id)).signers,
+    })),
+  );
+}
+
+async function resolveSignerMutationTarget(
+  opts: WalletMutationOpts,
+): Promise<{ signerScVal: xdr.ScVal; signerDescriptor: Record<string, unknown> }> {
+  const hasSecretRef = Boolean(opts.secretRef);
+  const hasDelegatedAddress = Boolean(opts.delegatedAddress);
+  const hasVerifierContractId = Boolean(opts.verifierContractId);
+  const hasPublicKeyHex = Boolean(opts.publicKeyHex);
+
+  if (hasSecretRef && (hasDelegatedAddress || hasPublicKeyHex)) {
+    throw new Error("Use either --secret-ref or direct signer identity flags, not both.");
+  }
+
+  if (hasDelegatedAddress && (hasVerifierContractId || hasPublicKeyHex)) {
+    throw new Error(
+      "Delegated signer mutations accept only --delegated-address, or use --secret-ref.",
+    );
+  }
+
+  if (hasPublicKeyHex && !hasVerifierContractId) {
+    throw new Error(
+      "External signer mutations require --verifier-contract-id with --public-key-hex.",
+    );
+  }
+
+  if (hasVerifierContractId && !hasSecretRef && !hasPublicKeyHex) {
+    throw new Error("External signer mutations require either --public-key-hex or --secret-ref.");
+  }
+
+  if (hasSecretRef) {
+    const resolver = new SecretResolver();
+    const secret = await resolver.resolve(opts.secretRef!);
+    let keypair: Keypair;
+    try {
+      keypair = Keypair.fromSecret(secret);
+    } catch {
+      throw new Error("secret-ref must resolve to a valid Stellar secret seed (S...)");
+    }
+
+    if (hasVerifierContractId) {
+      const publicKeyHex = credentialIdFromKeypair(keypair);
+      return {
+        signerScVal: makeExternalSignerScVal(opts.verifierContractId!, publicKeyHex),
+        signerDescriptor: {
+          type: "External",
+          verifier_contract_id: opts.verifierContractId,
+          public_key_hex: publicKeyHex,
+          secret_ref: opts.secretRef,
+        },
+      };
+    }
+
+    const delegatedAddress = keypair.publicKey();
+    return {
+      signerScVal: makeDelegatedSignerScVal(delegatedAddress),
+      signerDescriptor: {
+        type: "Delegated",
+        address: delegatedAddress,
+        secret_ref: opts.secretRef,
+      },
+    };
+  }
+
+  if (hasDelegatedAddress) {
+    return {
+      signerScVal: makeDelegatedSignerScVal(opts.delegatedAddress!),
+      signerDescriptor: {
+        type: "Delegated",
+        address: opts.delegatedAddress,
+      },
+    };
+  }
+
+  if (hasVerifierContractId && hasPublicKeyHex) {
+    return {
+      signerScVal: makeExternalSignerScVal(opts.verifierContractId!, opts.publicKeyHex!),
+      signerDescriptor: {
+        type: "External",
+        verifier_contract_id: opts.verifierContractId,
+        public_key_hex: opts.publicKeyHex,
+      },
+    };
+  }
+
+  throw new Error(
+    "Pass a signer target using --secret-ref, --delegated-address, or --verifier-contract-id with --public-key-hex.",
+  );
+}
+
 async function runSignerMutation(
   opts: WalletMutationOpts,
   functionName: "add_signer" | "remove_signer",
@@ -217,36 +346,51 @@ export const __testOnly = {
 const program = new Command();
 program
   .name("walleterm")
-  .description("CLI signer for Stellar/OZ smart-account flows")
+  .description("OpenZeppelin smart-account interface for Stellar")
+  .addHelpText(
+    "after",
+    [
+      "",
+      "Primary flows:",
+      "  walleterm review --in ./unsigned.json",
+      "  walleterm sign --in ./unsigned.json --out ./signed.json",
+      "  walleterm submit --in ./signed.json --mode channels",
+      "  walleterm wallet lookup --secret-ref op://Private/walleterm-testnet/delegated_seed",
+      "  walleterm wallet create --wasm-hash <hash> --delegated-address G... --out ./deploy.tx.xdr",
+      "  walleterm wallet signer add --account treasury --secret-ref op://... --out ./add.bundle.json",
+    ].join("\n"),
+  )
   .showHelpAfterError();
 
 program
-  .command("inspect")
-  .requiredOption("--in <path>", "input file (xdr or json)")
-  .option("--config <path>", "config TOML path", "walleterm.toml")
-  .action(async (opts: InputOpts) => {
-    const parsed = parseInputFile(opts.in);
-    const data = inspectInput(parsed);
-    process.stdout.write(`${JSON.stringify(data)}\n`);
-  });
-
-program
-  .command("can-sign")
+  .command("review")
+  .description("inspect a payload and show whether the configured wallet can sign it")
   .requiredOption("--in <path>", "input file (xdr or json)")
   .option("--config <path>", "config TOML path", "walleterm.toml")
   .option("--network <name>", "network name")
   .option("--account <alias>", "smart account alias")
   .action(async (opts: InputOpts) => {
-    const config = loadConfig(opts.config);
     const parsed = parseInputFile(opts.in);
-
+    const inspection = inspectInput(parsed);
+    const config = loadConfig(opts.config);
     const { name: networkName, config: network } = resolveNetwork(config, opts.network);
     const accountRef = resolveAccountForCommand(config, networkName, opts.account, parsed);
 
+    if (!accountRef) {
+      process.stdout.write(
+        `${JSON.stringify({
+          inspection,
+          signability: null,
+          account: null,
+          note: "No smart account selected. Pass --account <alias> or configure exactly one account on the selected network.",
+        })}\n`,
+      );
+      return;
+    }
+
     const resolver = new SecretResolver();
     const runtimeSigners = await loadRuntimeSigners(accountRef, resolver);
-
-    const result = canSignInput(parsed, {
+    const signability = canSignInput(parsed, {
       config,
       networkName,
       network,
@@ -255,7 +399,14 @@ program
       expirationLedger: 0,
     });
 
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({
+        inspection,
+        signability,
+        account: accountRef.alias,
+        contract_id: accountRef.account.contract_id,
+      })}\n`,
+    );
   });
 
 program
@@ -410,219 +561,211 @@ setup
     process.stdout.write(`${JSON.stringify(result)}\n`);
   });
 
-const keys = program.command("keys").description("key management");
-
-keys
-  .command("list")
-  .requiredOption("--account <alias>", "smart account alias")
-  .option("--config <path>", "config TOML path", "walleterm.toml")
-  .action(async (opts: BaseOpts) => {
-    const config = loadConfig(opts.config);
-    const account = config.smart_accounts[opts.account!];
-    if (!account) throw new Error(`Smart account '${opts.account}' not found`);
-
-    const result = listSignerConfig({ alias: opts.account!, account });
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  });
-
-keys
-  .command("verify")
-  .requiredOption("--account <alias>", "smart account alias")
-  .option("--config <path>", "config TOML path", "walleterm.toml")
-  .action(async (opts: BaseOpts) => {
-    const config = loadConfig(opts.config);
-    const account = config.smart_accounts[opts.account!];
-    if (!account) throw new Error(`Smart account '${opts.account}' not found`);
-
-    const resolver = new SecretResolver();
-    const result = await verifySignerSecrets({ alias: opts.account!, account }, resolver);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  });
-
-keys
-  .command("create")
-  .description("generate a new Stellar keypair")
-  .action(() => {
-    const keypair = Keypair.random();
-    process.stdout.write(
-      `${JSON.stringify({
-        secret_seed: keypair.secret(),
-        public_key: keypair.publicKey(),
-        public_key_hex: Buffer.from(keypair.rawPublicKey()).toString("hex"),
-      })}\n`,
-    );
-  });
-
-const wallet = program.command("wallet").description("smart wallet management");
+const wallet = program
+  .command("wallet")
+  .description("OpenZeppelin smart-account wallet management")
+  .addHelpText(
+    "after",
+    [
+      "",
+      "Primary wallet flows:",
+      "  walleterm wallet lookup --secret-ref op://Private/walleterm-testnet/delegated_seed",
+      "  walleterm wallet create --wasm-hash <hash> --delegated-address G... --out ./deploy.tx.xdr",
+      "  walleterm wallet signer add --account treasury --secret-ref op://... --out ./add.bundle.json",
+      "  walleterm wallet signer remove --account treasury --secret-ref op://... --out ./remove.bundle.json",
+    ].join("\n"),
+  );
 
 wallet
-  .command("discover")
-  .requiredOption("--address <stellar-address>", "G... or C... signer address")
-  .option("--config <path>", "config TOML path", "walleterm.toml")
-  .option("--network <name>", "network name")
-  .option("--indexer-url <url>", "override indexer base URL")
-  .action(async (opts: WalletLookupOpts) => {
-    const config = loadConfig(opts.config);
-    const { config: network } = resolveNetwork(config, opts.network);
-    const indexerUrl = resolveIndexerUrl(network, opts.indexerUrl);
-    const result = await discoverContractsByAddress(indexerUrl, opts.address!);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  });
-
-wallet
-  .command("list-signers")
-  .requiredOption("--contract-id <contract-id>", "smart account contract C-address")
-  .option("--config <path>", "config TOML path", "walleterm.toml")
-  .option("--network <name>", "network name")
-  .option("--indexer-url <url>", "override indexer base URL")
-  .action(async (opts: WalletLookupOpts) => {
-    const config = loadConfig(opts.config);
-    const { config: network } = resolveNetwork(config, opts.network);
-    const indexerUrl = resolveIndexerUrl(network, opts.indexerUrl);
-    const result = await listContractSigners(indexerUrl, opts.contractId!);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-  });
-
-wallet
-  .command("reconcile")
-  .requiredOption("--account <alias>", "smart account alias")
+  .command("lookup")
+  .description("resolve a signer, wallet, or contract into the smart-account view")
+  .option("--account <alias>", "configured smart account alias")
+  .option("--address <stellar-address>", "G... or C... address")
+  .option("--contract-id <contract-id>", "smart account contract C-address")
+  .option("--secret-ref <op-ref>", "1Password op:// ref to Stellar secret seed")
   .option("--config <path>", "config TOML path", "walleterm.toml")
   .option("--network <name>", "network name")
   .option("--indexer-url <url>", "override indexer base URL")
   .action(async (opts: WalletLookupOpts) => {
     const config = loadConfig(opts.config);
     const { name: networkName, config: network } = resolveNetwork(config, opts.network);
-    const accountAlias = requireAccountAlias(opts.account);
-    const account = config.smart_accounts[accountAlias];
-    if (!account) throw new Error(`Smart account '${accountAlias}' not found`);
-    if (account.network !== networkName) {
-      throw new Error(
-        `Smart account '${accountAlias}' belongs to network '${account.network}', not '${networkName}'`,
-      );
-    }
-
     const indexerUrl = resolveIndexerUrl(network, opts.indexerUrl);
-    const onchain = await listContractSigners(indexerUrl, account.contract_id);
-    const local = listSignerConfig({ alias: accountAlias, account });
 
-    const localKeys = new Set<string>();
-    for (const row of local.delegated) {
-      localKeys.add(`Delegated|${row.address}`);
-    }
-    for (const row of local.external) {
-      localKeys.add(`External|${row.verifier_contract_id}|${row.public_key_hex.toLowerCase()}`);
+    const selectors = [opts.account, opts.address, opts.contractId, opts.secretRef].filter(Boolean);
+    if (selectors.length !== 1) {
+      throw new Error("Pass exactly one of --account, --address, --contract-id, or --secret-ref.");
     }
 
-    const onchainKeys = new Set<string>();
-    for (const row of onchain.signers) {
-      if (row.signer_type === "Delegated" && row.signer_address) {
-        onchainKeys.add(`Delegated|${row.signer_address}`);
-      } else if (row.signer_type === "External" && row.signer_address && row.credential_id) {
-        onchainKeys.add(`External|${row.signer_address}|${row.credential_id.toLowerCase()}`);
+    if (opts.account) {
+      const accountAlias = requireAccountAlias(opts.account);
+      const account = config.smart_accounts[accountAlias];
+      if (!account) throw new Error(`Smart account '${accountAlias}' not found`);
+      if (account.network !== networkName) {
+        throw new Error(
+          `Smart account '${accountAlias}' belongs to network '${account.network}', not '${networkName}'`,
+        );
       }
+
+      const local = listSignerConfig({ alias: accountAlias, account });
+      const onchain = await listContractSigners(indexerUrl, account.contract_id);
+      process.stdout.write(
+        `${JSON.stringify({
+          mode: "account",
+          query: { account: accountAlias },
+          count: 1,
+          wallets: [
+            {
+              contract_id: account.contract_id,
+              configured_account: accountAlias,
+              configured_signers: local,
+              onchain_signers: onchain.signers,
+            },
+          ],
+        })}\n`,
+      );
+      return;
     }
 
-    const onlyLocal = [...localKeys].filter((key) => !onchainKeys.has(key));
-    const onlyOnchain = [...onchainKeys].filter((key) => !localKeys.has(key));
+    if (opts.contractId || opts.address?.startsWith("C")) {
+      const contractId = opts.contractId ?? opts.address!;
+      const onchain = await listContractSigners(indexerUrl, contractId);
+      process.stdout.write(
+        `${JSON.stringify({
+          mode: "contract",
+          query: { contract_id: contractId },
+          count: 1,
+          wallets: [{ contract_id: contractId, onchain_signers: onchain.signers }],
+        })}\n`,
+      );
+      return;
+    }
 
+    if (opts.address) {
+      const discovered = await discoverContractsByAddress(indexerUrl, opts.address);
+      const contracts = await enrichContractsWithOnchainSigners(
+        indexerUrl,
+        dedupeContractsById(discovered.contracts).map((contract) => ({
+          ...contract,
+          lookup_types: ["delegated"],
+        })),
+      );
+      process.stdout.write(
+        `${JSON.stringify({
+          mode: "address",
+          query: { address: opts.address },
+          count: contracts.length,
+          wallets: contracts,
+        })}\n`,
+      );
+      return;
+    }
+
+    const resolver = new SecretResolver();
+    const secret = await resolver.resolve(opts.secretRef!);
+    let keypair: Keypair;
+    try {
+      keypair = Keypair.fromSecret(secret);
+    } catch {
+      throw new Error("secret-ref must resolve to a valid Stellar secret seed (S...)");
+    }
+
+    const signerAddress = keypair.publicKey();
+    const credentialId = credentialIdFromKeypair(keypair);
+    const [delegated, external] = await Promise.all([
+      discoverContractsByAddress(indexerUrl, signerAddress),
+      discoverContractsByCredentialId(indexerUrl, credentialId),
+    ]);
+    const sourceByContractId = new Map<string, Set<"delegated" | "external">>();
+    for (const contract of delegated.contracts) {
+      const existing = sourceByContractId.get(contract.contract_id) ?? new Set();
+      existing.add("delegated");
+      sourceByContractId.set(contract.contract_id, existing);
+    }
+    for (const contract of external.contracts) {
+      const existing = sourceByContractId.get(contract.contract_id) ?? new Set();
+      existing.add("external");
+      sourceByContractId.set(contract.contract_id, existing);
+    }
+    const contracts = await enrichContractsWithOnchainSigners(
+      indexerUrl,
+      dedupeContractsById([...delegated.contracts, ...external.contracts]).map((contract) => {
+        const lookupTypes = sourceByContractId.get(contract.contract_id)!;
+        return {
+          ...contract,
+          lookup_types: [...lookupTypes],
+        };
+      }),
+    );
     process.stdout.write(
       `${JSON.stringify({
-        account: accountAlias,
-        contract_id: account.contract_id,
-        matched: [...localKeys].filter((key) => onchainKeys.has(key)),
-        only_local: onlyLocal,
-        only_onchain: onlyOnchain,
-        note: "External signer key matching compares indexer credential_id with config public_key_hex.",
+        mode: "secret-ref",
+        query: {
+          secret_ref: opts.secretRef,
+          derived_address: signerAddress,
+          credential_id: credentialId,
+        },
+        count: contracts.length,
+        wallets: contracts,
       })}\n`,
     );
   });
 
-wallet
-  .command("add-delegated-signer")
-  .requiredOption("--account <alias>", "smart account alias")
-  .requiredOption("--context-rule-id <n>", "context rule id")
-  .requiredOption("--delegated-address <g-address>", "G-address signer")
-  .requiredOption("--out <path>", "output bundle json path")
-  .option("--config <path>", "config TOML path", "walleterm.toml")
-  .option("--network <name>", "network name")
-  .option("--ttl-seconds <n>", "auth ttl in seconds")
-  .option("--latest-ledger <n>", "override latest ledger sequence")
-  .action(async (opts: WalletMutationOpts) => {
-    await runSignerMutation(opts, "add_signer", makeDelegatedSignerScVal(opts.delegatedAddress!), {
-      type: "Delegated",
-      address: opts.delegatedAddress,
-    });
+const signer = wallet.command("signer").description("manage smart-account signers");
+
+signer
+  .command("generate")
+  .description("generate a new Stellar signer keypair")
+  .action(() => {
+    process.stdout.write(`${JSON.stringify(buildKeypairJson(Keypair.random()))}\n`);
   });
 
-wallet
-  .command("remove-delegated-signer")
+async function runSignerMutationCommand(
+  opts: WalletMutationOpts,
+  functionName: "add_signer" | "remove_signer",
+): Promise<void> {
+  const { signerScVal, signerDescriptor } = await resolveSignerMutationTarget(opts);
+  await runSignerMutation(opts, functionName, signerScVal, signerDescriptor);
+}
+
+signer
+  .command("add")
+  .description("build and sign an add_signer bundle")
   .requiredOption("--account <alias>", "smart account alias")
-  .requiredOption("--context-rule-id <n>", "context rule id")
-  .requiredOption("--delegated-address <g-address>", "G-address signer")
+  .option("--context-rule-id <n>", "context rule id (default: 0)", "0")
   .requiredOption("--out <path>", "output bundle json path")
   .option("--config <path>", "config TOML path", "walleterm.toml")
   .option("--network <name>", "network name")
   .option("--ttl-seconds <n>", "auth ttl in seconds")
   .option("--latest-ledger <n>", "override latest ledger sequence")
+  .option("--secret-ref <op-ref>", "derive signer identity from 1Password seed")
+  .option("--delegated-address <g-address>", "delegated signer G-address")
+  .option("--verifier-contract-id <contract-id>", "verifier contract C-address")
+  .option("--public-key-hex <hex>", "32-byte ed25519 public key hex")
   .action(async (opts: WalletMutationOpts) => {
-    await runSignerMutation(
-      opts,
-      "remove_signer",
-      makeDelegatedSignerScVal(opts.delegatedAddress!),
-      { type: "Delegated", address: opts.delegatedAddress },
-    );
+    await runSignerMutationCommand(opts, "add_signer");
   });
 
-wallet
-  .command("add-external-ed25519-signer")
+signer
+  .command("remove")
+  .description("build and sign a remove_signer bundle")
   .requiredOption("--account <alias>", "smart account alias")
-  .requiredOption("--context-rule-id <n>", "context rule id")
-  .requiredOption("--verifier-contract-id <contract-id>", "verifier contract C-address")
-  .requiredOption("--public-key-hex <hex>", "32-byte ed25519 public key hex")
+  .option("--context-rule-id <n>", "context rule id (default: 0)", "0")
   .requiredOption("--out <path>", "output bundle json path")
   .option("--config <path>", "config TOML path", "walleterm.toml")
   .option("--network <name>", "network name")
   .option("--ttl-seconds <n>", "auth ttl in seconds")
   .option("--latest-ledger <n>", "override latest ledger sequence")
+  .option("--secret-ref <op-ref>", "derive signer identity from 1Password seed")
+  .option("--delegated-address <g-address>", "delegated signer G-address")
+  .option("--verifier-contract-id <contract-id>", "verifier contract C-address")
+  .option("--public-key-hex <hex>", "32-byte ed25519 public key hex")
   .action(async (opts: WalletMutationOpts) => {
-    await runSignerMutation(
-      opts,
-      "add_signer",
-      makeExternalSignerScVal(opts.verifierContractId!, opts.publicKeyHex!),
-      {
-        type: "External",
-        verifier_contract_id: opts.verifierContractId,
-        public_key_hex: opts.publicKeyHex,
-      },
-    );
-  });
-
-wallet
-  .command("remove-external-ed25519-signer")
-  .requiredOption("--account <alias>", "smart account alias")
-  .requiredOption("--context-rule-id <n>", "context rule id")
-  .requiredOption("--verifier-contract-id <contract-id>", "verifier contract C-address")
-  .requiredOption("--public-key-hex <hex>", "32-byte ed25519 public key hex")
-  .requiredOption("--out <path>", "output bundle json path")
-  .option("--config <path>", "config TOML path", "walleterm.toml")
-  .option("--network <name>", "network name")
-  .option("--ttl-seconds <n>", "auth ttl in seconds")
-  .option("--latest-ledger <n>", "override latest ledger sequence")
-  .action(async (opts: WalletMutationOpts) => {
-    await runSignerMutation(
-      opts,
-      "remove_signer",
-      makeExternalSignerScVal(opts.verifierContractId!, opts.publicKeyHex!),
-      {
-        type: "External",
-        verifier_contract_id: opts.verifierContractId,
-        public_key_hex: opts.publicKeyHex,
-      },
-    );
+    await runSignerMutationCommand(opts, "remove_signer");
   });
 
 wallet
   .command("create")
+  .description("build a deployment transaction for a new OZ smart account")
   .option(
     "--deployer-secret-ref <op-ref>",
     "override deployer seed (default uses smart-account-kit deterministic deployer)",

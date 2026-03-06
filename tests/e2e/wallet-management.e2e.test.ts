@@ -133,7 +133,9 @@ async function runCli(fx: Fixture, args: string[]) {
 
 function startMockIndexer() {
   const delegatedAddress = Keypair.random().publicKey();
+  const externalCredentialId = "1e4d40bc5f4f18b36d1ec4aa440f5d3a3cf7c35d089f95de5e7505cab6f3188a";
   const signerContract = StrKey.encodeContract(Buffer.alloc(32, 21));
+  const externalContract = StrKey.encodeContract(Buffer.alloc(32, 23));
   const signerVerifier = StrKey.encodeContract(Buffer.alloc(32, 22));
 
   const handler = (req: IncomingMessage, res: ServerResponse) => {
@@ -163,6 +165,29 @@ function startMockIndexer() {
       return;
     }
 
+    if (path.startsWith("/api/lookup/")) {
+      const body = {
+        credentialId: externalCredentialId,
+        contracts: [
+          {
+            contract_id: externalContract,
+            context_rule_count: 1,
+            external_signer_count: 1,
+            delegated_signer_count: 0,
+            native_signer_count: 0,
+            first_seen_ledger: 150,
+            last_seen_ledger: 250,
+            context_rule_ids: [0],
+          },
+        ],
+        count: 1,
+      };
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(body));
+      return;
+    }
+
     if (path === `/api/contract/${signerContract}/signers`) {
       const body = {
         contractId: signerContract,
@@ -177,7 +202,25 @@ function startMockIndexer() {
             context_rule_id: 0,
             signer_type: "External",
             signer_address: signerVerifier,
-            credential_id: "1e4d40bc5f4f18b36d1ec4aa440f5d3a3cf7c35d089f95de5e7505cab6f3188a",
+            credential_id: externalCredentialId,
+          },
+        ],
+      };
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(body));
+      return;
+    }
+
+    if (path === `/api/contract/${externalContract}/signers`) {
+      const body = {
+        contractId: externalContract,
+        signers: [
+          {
+            context_rule_id: 0,
+            signer_type: "External",
+            signer_address: signerVerifier,
+            credential_id: externalCredentialId,
           },
         ],
       };
@@ -197,6 +240,7 @@ function startMockIndexer() {
     baseUrl: string;
     close: () => Promise<void>;
     signerContract: string;
+    externalContract: string;
     delegatedAddress: string;
   }>((resolve) => {
     server.listen(0, "127.0.0.1", () => {
@@ -207,6 +251,7 @@ function startMockIndexer() {
       resolve({
         baseUrl: `http://127.0.0.1:${address.port}`,
         signerContract,
+        externalContract,
         delegatedAddress,
         close: () =>
           new Promise<void>((done, reject) => {
@@ -225,7 +270,7 @@ describe("walleterm wallet management e2e", () => {
     const mock = await startMockIndexer();
     const fx = makeFixture(mock.baseUrl);
 
-    const res = await runCli(fx, ["keys", "create"]);
+    const res = await runCli(fx, ["wallet", "signer", "generate"]);
     const out = JSON.parse(res.stdout);
 
     const kp = Keypair.fromSecret(out.secret_seed);
@@ -235,14 +280,14 @@ describe("walleterm wallet management e2e", () => {
     await mock.close();
   });
 
-  it("discovers wallets by signer address through indexer", async () => {
+  it("looks up wallets by signer address through indexer", async () => {
     const mock = await startMockIndexer();
     const fx = makeFixture(mock.baseUrl);
 
     const signerAddress = Keypair.random().publicKey();
     const res = await runCli(fx, [
       "wallet",
-      "discover",
+      "lookup",
       "--config",
       fx.configPath,
       "--network",
@@ -252,19 +297,49 @@ describe("walleterm wallet management e2e", () => {
     ]);
 
     const out = JSON.parse(res.stdout);
+    expect(out.mode).toBe("address");
     expect(out.count).toBe(1);
-    expect(out.contracts[0].contract_id).toBe(mock.signerContract);
+    expect(out.wallets[0].contract_id).toBe(mock.signerContract);
 
     await mock.close();
   });
 
-  it("lists wallet signers through indexer", async () => {
+  it("looks up wallets directly from an op secret ref and includes onchain signers", async () => {
     const mock = await startMockIndexer();
     const fx = makeFixture(mock.baseUrl);
 
     const res = await runCli(fx, [
       "wallet",
-      "list-signers",
+      "lookup",
+      "--config",
+      fx.configPath,
+      "--network",
+      fx.network,
+      "--secret-ref",
+      "op://vault/delegated/seed",
+    ]);
+
+    const out = JSON.parse(res.stdout);
+    expect(out.mode).toBe("secret-ref");
+    expect(out.query.derived_address).toBe(fx.delegated.publicKey());
+    expect(out.count).toBe(2);
+    expect(out.wallets.map((row: { contract_id: string }) => row.contract_id)).toEqual(
+      expect.arrayContaining([mock.signerContract, mock.externalContract]),
+    );
+    expect(
+      out.wallets.every((row: { onchain_signers: unknown[] }) => row.onchain_signers.length > 0),
+    ).toBe(true);
+
+    await mock.close();
+  });
+
+  it("looks up wallet signers by contract id", async () => {
+    const mock = await startMockIndexer();
+    const fx = makeFixture(mock.baseUrl);
+
+    const res = await runCli(fx, [
+      "wallet",
+      "lookup",
       "--config",
       fx.configPath,
       "--network",
@@ -274,8 +349,9 @@ describe("walleterm wallet management e2e", () => {
     ]);
 
     const out = JSON.parse(res.stdout);
-    expect(out.contractId).toBe(mock.signerContract);
-    expect(out.signers.length).toBe(2);
+    expect(out.mode).toBe("contract");
+    expect(out.wallets[0].contract_id).toBe(mock.signerContract);
+    expect(out.wallets[0].onchain_signers.length).toBe(2);
 
     await mock.close();
   });
@@ -283,11 +359,11 @@ describe("walleterm wallet management e2e", () => {
   it("builds and signs add-delegated-signer bundle", async () => {
     const mock = await startMockIndexer();
     const fx = makeFixture(mock.baseUrl);
-    const newSigner = Keypair.random().publicKey();
 
     const res = await runCli(fx, [
       "wallet",
-      "add-delegated-signer",
+      "signer",
+      "add",
       "--config",
       fx.configPath,
       "--network",
@@ -296,8 +372,8 @@ describe("walleterm wallet management e2e", () => {
       "treasury",
       "--context-rule-id",
       "0",
-      "--delegated-address",
-      newSigner,
+      "--secret-ref",
+      "op://vault/delegated/seed",
       "--latest-ledger",
       "1000",
       "--out",
@@ -322,12 +398,12 @@ describe("walleterm wallet management e2e", () => {
   it("builds and signs add-external-ed25519-signer bundle", async () => {
     const mock = await startMockIndexer();
     const fx = makeFixture(mock.baseUrl);
-    const signer = Keypair.random();
     const verifier = StrKey.encodeContract(Buffer.alloc(32, 33));
 
     const res = await runCli(fx, [
       "wallet",
-      "add-external-ed25519-signer",
+      "signer",
+      "add",
       "--config",
       fx.configPath,
       "--network",
@@ -336,10 +412,10 @@ describe("walleterm wallet management e2e", () => {
       "treasury",
       "--context-rule-id",
       "0",
+      "--secret-ref",
+      "op://vault/external/seed",
       "--verifier-contract-id",
       verifier,
-      "--public-key-hex",
-      toHex(signer.rawPublicKey()),
       "--latest-ledger",
       "1200",
       "--out",

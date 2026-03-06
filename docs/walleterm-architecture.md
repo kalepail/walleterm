@@ -41,18 +41,20 @@ Contract verification:
 - CLI verifies contract wasm hash before signing smart-account auth payloads.
 
 ## CLI Commands
-- `walleterm inspect --network <name> --in <xdr_or_json_file>`
-  - Decode and print what will be signed.
-- `walleterm can-sign --network <name> --in <xdr_or_json_file> [--account <alias>]`
-  - Dry-run signer matching; no signatures created.
+- `walleterm review --network <name> --in <xdr_or_json_file> [--account <alias>]`
+  - Primary pre-sign flow. Decode the payload and show signability for the selected wallet.
 - `walleterm sign --network <name> --in <xdr_or_json_file> --out <file> [--account <alias>] [--ttl-seconds <n>]`
   - Main v0 flow. Signs all eligible payloads and writes signed output.
 - `walleterm submit --network <name> --in <signed_xdr_or_bundle> [--wait|--no-wait]`
   - Optional relay submit path.
-- `walleterm keys list --account <alias>`
-  - Lists configured signer public keys and 1Password refs (never secret values).
-- `walleterm keys verify --account <alias>`
-  - Resolves 1Password secrets and confirms they derive to configured public keys.
+- `walleterm wallet lookup --secret-ref <op://...>` or `--account <alias>` or `--address <G...|C...>`
+  - Primary wallet discovery/introspection flow.
+- `walleterm wallet signer generate`
+  - Generates a Stellar signer keypair.
+- `walleterm wallet signer add|remove --account <alias> ...`
+  - Builds and signs signer-management bundles.
+- `walleterm wallet create ...`
+  - Builds the deployment transaction for a new smart account.
 
 ## Input Formats
 - `TransactionEnvelope` base64 XDR text.
@@ -100,7 +102,7 @@ Contract behavior this aligns with:
 - Delegated signer verification path uses `require_auth_for_args(payload)`.
 
 ## Review Pipeline
-`inspect` and pre-sign review output should include:
+`review` output should include:
 - envelope type, source account, sequence, fee, timebounds,
 - operation list,
 - per auth entry:
@@ -193,7 +195,7 @@ Classes:
 
 ## Suggested Implementation Order
 1. Project bootstrap + config loader + network profile validation.
-2. XDR parser + inspect command.
+2. XDR parser + review command.
 3. 1Password resolver + key verification.
 4. Envelope signing.
 5. Generic auth-entry signing.

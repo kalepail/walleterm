@@ -13,6 +13,7 @@ import {
 import type { NetworkConfig } from "../../src/config.js";
 import {
   createWalletDeployTx,
+  discoverContractsByCredentialId,
   deriveContractIdFromSalt,
   discoverContractsByAddress,
   listContractSigners,
@@ -284,6 +285,9 @@ describe("wallet unit", () => {
     const base = `http://127.0.0.1:${addr.port}`;
 
     await expect(discoverContractsByAddress(base, "GABC")).rejects.toThrow(
+      /Indexer request failed/i,
+    );
+    await expect(discoverContractsByCredentialId(base, "abc123")).rejects.toThrow(
       /Indexer request failed/i,
     );
     await expect(listContractSigners(base, "CABC")).rejects.toThrow(/Indexer request failed/i);

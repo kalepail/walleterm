@@ -54,11 +54,19 @@ Or run with `op run --`.
 
 ## Core commands
 
-### Existing signing flow
+If you want the smallest useful command set, start with:
+- `setup op`
+- `wallet lookup`
+- `wallet signer`
+- `wallet create`
+- `review`
+- `sign`
+- `submit`
+
+### Review and signing flow
 
 ```bash
-bun src/cli.ts inspect --in ./unsigned.json --config ./walleterm.toml
-bun src/cli.ts can-sign --in ./unsigned.json --config ./walleterm.toml --network testnet --account treasury
+bun src/cli.ts review --in ./unsigned.json --config ./walleterm.toml --network testnet --account treasury
 bun src/cli.ts sign --in ./unsigned.json --out ./signed.json --config ./walleterm.toml --network testnet --account treasury
 ```
 
@@ -139,80 +147,59 @@ bun src/cli.ts setup op \
   --json
 ```
 
-### Key management
-
-Generate a new seed/public keypair:
-
-```bash
-bun src/cli.ts keys create
-```
-
-Verify configured 1Password key refs match configured signer keys:
-
-```bash
-bun src/cli.ts keys verify --config ./walleterm.toml --account treasury
-```
-
 ### Wallet discovery and signer inspection
 
-Find wallets by signer address (`G...` or `C...`):
+Preferred one-shot lookup from 1Password:
 
 ```bash
-bun src/cli.ts wallet discover --config ./walleterm.toml --network testnet --address G...
+bun src/cli.ts wallet lookup \
+  --config ./walleterm.toml \
+  --network testnet \
+  --secret-ref op://Private/walleterm-testnet/delegated_seed
 ```
 
-List signers for a wallet contract:
+Other lookup modes:
 
 ```bash
-bun src/cli.ts wallet list-signers --config ./walleterm.toml --network testnet --contract-id C...
+bun src/cli.ts wallet lookup --config ./walleterm.toml --network testnet --account treasury
+bun src/cli.ts wallet lookup --config ./walleterm.toml --network testnet --address G...
+bun src/cli.ts wallet lookup --config ./walleterm.toml --network testnet --address C...
 ```
 
-Compare local config signers vs indexer signers for an account:
+### Signer management
+
+Generate a new signer keypair:
 
 ```bash
-bun src/cli.ts wallet reconcile --config ./walleterm.toml --network testnet --account treasury
+bun src/cli.ts wallet signer generate
 ```
 
-### Build signer-management bundles (sign-only output)
-
-Add delegated signer:
+Add delegated signer from 1Password:
 
 ```bash
-bun src/cli.ts wallet add-delegated-signer \
+bun src/cli.ts wallet signer add \
   --config ./walleterm.toml --network testnet --account treasury \
-  --context-rule-id 0 --delegated-address G... \
+  --secret-ref op://Private/walleterm-testnet/delegated_seed \
   --out ./add-delegated.bundle.json
 ```
 
-Remove delegated signer:
+Add external Ed25519 signer from 1Password:
 
 ```bash
-bun src/cli.ts wallet remove-delegated-signer \
+bun src/cli.ts wallet signer add \
   --config ./walleterm.toml --network testnet --account treasury \
-  --context-rule-id 0 --delegated-address G... \
-  --out ./remove-delegated.bundle.json
-```
-
-Add external Ed25519 signer:
-
-```bash
-bun src/cli.ts wallet add-external-ed25519-signer \
-  --config ./walleterm.toml --network testnet --account treasury \
-  --context-rule-id 0 \
+  --secret-ref op://Private/walleterm-testnet/external_seed \
   --verifier-contract-id CVERIFIER... \
-  --public-key-hex <32-byte-hex> \
   --out ./add-external.bundle.json
 ```
 
-Remove external Ed25519 signer:
+Remove signer:
 
 ```bash
-bun src/cli.ts wallet remove-external-ed25519-signer \
+bun src/cli.ts wallet signer remove \
   --config ./walleterm.toml --network testnet --account treasury \
-  --context-rule-id 0 \
-  --verifier-contract-id CVERIFIER... \
-  --public-key-hex <32-byte-hex> \
-  --out ./remove-external.bundle.json
+  --secret-ref op://Private/walleterm-testnet/delegated_seed \
+  --out ./remove-signer.bundle.json
 ```
 
 ### Create/deploy a new wallet

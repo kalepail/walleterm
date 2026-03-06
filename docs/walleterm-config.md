@@ -45,7 +45,7 @@ channels_api_key_ref = "op://Private/walleterm-testnet/channels_api_key"
 Fields:
 - `rpc_url` (required)
 - `network_passphrase` (required)
-- `indexer_url` (optional): Used for wallet discovery/reconcile features.
+- `indexer_url` (optional): Used for `wallet lookup` and signer introspection.
 - `channels_base_url` (optional): Needed when submitting via Channels unless provided by CLI flags.
 - `channels_api_key_ref` (optional): Can be either:
   - `op://...` reference, or

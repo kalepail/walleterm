@@ -430,7 +430,8 @@ enabled = true
         [
           "src/cli.ts",
           "wallet",
-          "add-delegated-signer",
+          "signer",
+          "add",
           "--config",
           configPath,
           "--network",
