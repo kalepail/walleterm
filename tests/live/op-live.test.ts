@@ -61,6 +61,51 @@ async function waitForHorizonTransaction(hash: string): Promise<void> {
   throw new Error(`Timed out waiting for Horizon transaction ${hash}`);
 }
 
+async function waitForWalletLookup(
+  args: string[],
+  env: NodeJS.ProcessEnv | undefined,
+  predicate: (result: {
+    count?: number;
+    wallets?: Array<{ contract_id?: string; lookup_types?: string[]; onchain_signers?: unknown[] }>;
+  }) => boolean,
+): Promise<{
+  count?: number;
+  wallets?: Array<{ contract_id?: string; lookup_types?: string[]; onchain_signers?: unknown[] }>;
+}> {
+  let lastResult:
+    | {
+        count?: number;
+        wallets?: Array<{
+          contract_id?: string;
+          lookup_types?: string[];
+          onchain_signers?: unknown[];
+        }>;
+      }
+    | undefined;
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const lookup = await execa("bun", ["src/cli.ts", "wallet", "lookup", ...args], {
+      cwd: PROJECT_ROOT,
+      env,
+    });
+    const result = JSON.parse(lookup.stdout) as {
+      count?: number;
+      wallets?: Array<{
+        contract_id?: string;
+        lookup_types?: string[];
+        onchain_signers?: unknown[];
+      }>;
+    };
+    lastResult = result;
+    if (predicate(result)) {
+      return result;
+    }
+    await sleep(2_000);
+  }
+
+  throw new Error(`Timed out waiting for wallet lookup to match: ${JSON.stringify(lastResult)}`);
+}
+
 function xlmStringToStroops(amount: string): bigint {
   const [wholePart, fracPart = ""] = amount.split(".");
   const fracPadded = `${fracPart}0000000`.slice(0, 7);
@@ -264,6 +309,31 @@ channels_api_key_ref = "${channelsApiKeyRef}"
       expect(readFileSync(deployXdrPath, "utf8").trim().length).toBeGreaterThan(0);
 
       await waitForHorizonTransaction(createOut.submission!.hash!);
+
+      const lookupByContract = await waitForWalletLookup(
+        ["--config", configPath, "--network", "testnet", "--contract-id", createOut.contract_id],
+        process.env,
+        (result) =>
+          result.count === 1 &&
+          result.wallets?.[0]?.contract_id === createOut.contract_id &&
+          (result.wallets[0]?.onchain_signers?.length ?? 0) > 0,
+      );
+      expect(lookupByContract.wallets?.[0]?.contract_id).toBe(createOut.contract_id);
+
+      const lookupBySecretRef = await waitForWalletLookup(
+        ["--config", configPath, "--network", "testnet", "--secret-ref", delegatedRef],
+        process.env,
+        (result) =>
+          (result.wallets ?? []).some(
+            (wallet) =>
+              wallet.contract_id === createOut.contract_id &&
+              (wallet.lookup_types ?? []).includes("delegated") &&
+              (wallet.onchain_signers?.length ?? 0) > 0,
+          ),
+      );
+      expect(
+        lookupBySecretRef.wallets?.some((wallet) => wallet.contract_id === createOut.contract_id),
+      ).toBe(true);
 
       writeFileSync(
         configPath,

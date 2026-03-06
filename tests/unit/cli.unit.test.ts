@@ -108,7 +108,7 @@ vi.mock("../../src/secrets.js", () => {
   return { SecretResolver };
 });
 
-import { __testOnly, runCli } from "../../src/cli.js";
+import { runCli } from "../../src/cli.js";
 
 async function run(args: string[]) {
   let stdout = "";
@@ -257,32 +257,6 @@ beforeEach(() => {
 });
 
 describe("cli unit", () => {
-  it("covers helper validations and submit overrides", () => {
-    expect(__testOnly.parseOptionalInt(undefined)).toBeUndefined();
-    expect(__testOnly.parseOptionalInt("42")).toBe(42);
-    expect(() => __testOnly.parseOptionalInt("NaN")).toThrow(/Invalid integer value/i);
-
-    expect(__testOnly.requireAccountAlias("treasury")).toBe("treasury");
-    expect(() => __testOnly.requireAccountAlias(undefined)).toThrow(/Pass --account/i);
-
-    expect(__testOnly.requireNonNegativeInt(0, "x")).toBe(0);
-    expect(() => __testOnly.requireNonNegativeInt(-1, "x")).toThrow(/non-negative integer/i);
-
-    expect(
-      __testOnly.getSubmitOverrides({
-        channelsBaseUrl: "https://channels",
-        channelsApiKey: "k",
-        channelsApiKeyRef: "op://v/i/key",
-        pluginId: "p",
-      }),
-    ).toEqual({
-      channelsBaseUrl: "https://channels",
-      channelsApiKey: "k",
-      channelsApiKeyRef: "op://v/i/key",
-      pluginId: "p",
-    });
-  });
-
   it("runs review command with signability details", async () => {
     mockParseInputFile.mockReturnValue({ kind: "bundle", auth: [] });
     mockInspectInput.mockReturnValue({ kind: "bundle", operations: 1 });
@@ -324,6 +298,12 @@ describe("cli unit", () => {
     ).rejects.toThrow(/No smart account selected/i);
   });
 
+  it("sign rejects invalid integer flags", async () => {
+    await expect(
+      run(["sign", "--in", "in.txt", "--out", "out.txt", "--ttl-seconds", "NaN"]),
+    ).rejects.toThrow(/Invalid integer value 'NaN'/i);
+  });
+
   it("submit rpc rejects non-tx input and succeeds for tx input", async () => {
     mockParseInputFile.mockReturnValueOnce({ kind: "bundle", auth: [] });
     await expect(run(["submit", "--in", "in.json", "--mode", "rpc"])).rejects.toThrow(
@@ -342,6 +322,36 @@ describe("cli unit", () => {
     mockParseInputFile.mockReturnValueOnce({ kind: "bundle", auth: [] });
     await run(["submit", "--in", "in.json"]);
     expect(mockSubmitViaChannels).toHaveBeenCalledTimes(1);
+  });
+
+  it("submit forwards explicit channels overrides", async () => {
+    mockParseInputFile.mockReturnValueOnce({ kind: "bundle", auth: [] });
+
+    await run([
+      "submit",
+      "--in",
+      "in.json",
+      "--channels-base-url",
+      "https://channels.example",
+      "--channels-api-key",
+      "api-key",
+      "--channels-api-key-ref",
+      "op://Private/item/channels_api_key",
+      "--plugin-id",
+      "plugin-123",
+    ]);
+
+    expect(mockSubmitViaChannels).toHaveBeenCalledWith(
+      { kind: "bundle", auth: [] },
+      expect.any(Object),
+      expect.any(Object),
+      {
+        channelsBaseUrl: "https://channels.example",
+        channelsApiKey: "api-key",
+        channelsApiKeyRef: "op://Private/item/channels_api_key",
+        pluginId: "plugin-123",
+      },
+    );
   });
 
   it("setup op prints warning and verbose output without --json", async () => {
@@ -759,6 +769,24 @@ describe("cli unit", () => {
       999,
     );
     expect(JSON.parse(res.stdout)).toMatchObject({ context_rule_id: 0 });
+  });
+
+  it("wallet signer add rejects negative context-rule-id", async () => {
+    await expect(
+      run([
+        "wallet",
+        "signer",
+        "add",
+        "--account",
+        "treasury",
+        "--context-rule-id",
+        "-1",
+        "--delegated-address",
+        Keypair.random().publicKey(),
+        "--out",
+        "out.json",
+      ]),
+    ).rejects.toThrow(/context-rule-id must be a non-negative integer/i);
   });
 
   it("wallet signer add validates signer target shapes", async () => {

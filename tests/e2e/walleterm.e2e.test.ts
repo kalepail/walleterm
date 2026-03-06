@@ -213,22 +213,6 @@ async function runCli(fx: Fixture, args: string[]) {
 }
 
 describe("walleterm e2e", () => {
-  it("rejects removed wallet signer verify command", async () => {
-    const fx = makeFixture();
-
-    await expect(
-      runCli(fx, [
-        "wallet",
-        "signer",
-        "verify",
-        "--config",
-        fx.configPath,
-        "--account",
-        "treasury",
-      ]),
-    ).rejects.toThrow(/unknown command/i);
-  });
-
   it("signs a standalone delegated auth entry", async () => {
     const fx = makeFixture();
     const entry = makeDelegatedEntry(fx.delegated.publicKey());

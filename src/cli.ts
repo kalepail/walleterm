@@ -54,6 +54,7 @@ interface WalletLookupOpts extends BaseOpts {
 }
 
 interface WalletMutationOpts extends BaseOpts {
+  account: string;
   out: string;
   contextRuleId: string;
   ttlSeconds?: string;
@@ -117,32 +118,11 @@ function collectValues(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
 
-function requireAccountAlias(alias: string | undefined): string {
-  if (!alias) {
-    throw new Error("Pass --account <alias>");
-  }
-  return alias;
-}
-
 function requireNonNegativeInt(value: number | undefined, label: string): number {
   if (value === undefined || value < 0) {
     throw new Error(`${label} must be a non-negative integer`);
   }
   return value;
-}
-
-function getSubmitOverrides(opts: {
-  channelsBaseUrl?: string;
-  channelsApiKey?: string;
-  channelsApiKeyRef?: string;
-  pluginId?: string;
-}): SubmitNetworkOverrides {
-  return {
-    channelsBaseUrl: opts.channelsBaseUrl,
-    channelsApiKey: opts.channelsApiKey,
-    channelsApiKeyRef: opts.channelsApiKeyRef,
-    pluginId: opts.pluginId,
-  };
 }
 
 function dedupeContractsById(contracts: IndexerContractSummary[]): IndexerContractSummary[] {
@@ -279,7 +259,7 @@ async function runSignerMutation(
 ): Promise<void> {
   const config = loadConfig(opts.config);
   const { name: networkName, config: network } = resolveNetwork(config, opts.network);
-  const accountAlias = requireAccountAlias(opts.account);
+  const accountAlias = opts.account;
   const account = config.smart_accounts[accountAlias];
   if (!account) throw new Error(`Smart account '${accountAlias}' not found`);
   if (account.network !== networkName) {
@@ -335,13 +315,6 @@ async function runSignerMutation(
     })}\n`,
   );
 }
-
-export const __testOnly = {
-  parseOptionalInt,
-  requireAccountAlias,
-  requireNonNegativeInt,
-  getSubmitOverrides,
-};
 
 const program = new Command();
 program
@@ -490,7 +463,12 @@ program
     }
 
     const resolver = new SecretResolver();
-    const result = await submitViaChannels(parsed, network, resolver, getSubmitOverrides(opts));
+    const result = await submitViaChannels(parsed, network, resolver, {
+      channelsBaseUrl: opts.channelsBaseUrl,
+      channelsApiKey: opts.channelsApiKey,
+      channelsApiKeyRef: opts.channelsApiKeyRef,
+      pluginId: opts.pluginId,
+    } satisfies SubmitNetworkOverrides);
     process.stdout.write(`${JSON.stringify(result)}\n`);
   });
 
@@ -597,7 +575,7 @@ wallet
     }
 
     if (opts.account) {
-      const accountAlias = requireAccountAlias(opts.account);
+      const accountAlias = opts.account;
       const account = config.smart_accounts[accountAlias];
       if (!account) throw new Error(`Smart account '${accountAlias}' not found`);
       if (account.network !== networkName) {
@@ -868,7 +846,12 @@ wallet
         };
       } else {
         const parsed = parseInputFile(opts.out);
-        submission = await submitViaChannels(parsed, network, resolver, getSubmitOverrides(opts));
+        submission = await submitViaChannels(parsed, network, resolver, {
+          channelsBaseUrl: opts.channelsBaseUrl,
+          channelsApiKey: opts.channelsApiKey,
+          channelsApiKeyRef: opts.channelsApiKeyRef,
+          pluginId: opts.pluginId,
+        } satisfies SubmitNetworkOverrides);
       }
     }
 
