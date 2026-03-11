@@ -8,6 +8,10 @@ Canonical schema is implemented in:
 A full annotated template lives at:
 - `walleterm.example.toml`
 
+Secret refs are provider-backed URIs. Current supported schemes are:
+- `op://...` for 1Password
+- `keychain://...` for the macOS keychain
+
 ## 1) app section
 
 ```toml
@@ -48,7 +52,7 @@ Fields:
 - `indexer_url` (optional): Used for `wallet lookup` and signer introspection.
 - `channels_base_url` (optional): Needed when submitting via Channels unless provided by CLI flags.
 - `channels_api_key_ref` (optional): Can be either:
-  - `op://...` reference, or
+  - provider-backed secret ref like `op://...` or `keychain://...`, or
   - direct API key string.
 - `deployer_secret_ref` (optional): `wallet create` override source. If omitted, CLI uses the smart-account-kit deterministic deployer.
 
@@ -81,7 +85,9 @@ enabled = true
 Fields:
 - `name` (required)
 - `address` (required): Delegated signer Stellar account (`G...`).
-- `secret_ref` (required): Currently expects a 1Password `op://...` reference that resolves to Stellar secret seed (`S...`).
+- `secret_ref` (required): Provider-backed secret ref that resolves to Stellar secret seed (`S...`), for example:
+  - `op://Private/walleterm-testnet/delegated_seed`
+  - `keychain://walleterm-testnet/delegated_seed`
 - `enabled` (optional, default `true`)
 
 ### external_signers
@@ -99,7 +105,7 @@ Fields:
 - `name` (required)
 - `verifier_contract_id` (required): OZ verifier contract (`C...`).
 - `public_key_hex` (required): 32-byte ed25519 public key in hex.
-- `secret_ref` (required): 1Password `op://...` reference to corresponding Stellar seed (`S...`).
+- `secret_ref` (required): Provider-backed secret ref to corresponding Stellar seed (`S...`).
 - `enabled` (optional, default `true`)
 
 ## 4) Minimal Valid Config
@@ -117,13 +123,16 @@ network_passphrase = "Test SDF Network ; September 2015"
 
 ## 5) Practical Notes
 
-- If you run `setup op`, default item names are:
+- If you run `setup op` or `setup keychain`, default logical container names are:
   - `walleterm-testnet`
   - `walleterm-mainnet`
-- `setup op` creates/stores by default:
+- Both setup commands create/store by default:
   - `delegated_seed`
   - `channels_api_key`
 - Storing `deployer_seed` is optional (`--include-deployer-seed`).
+- `setup keychain` stores those values as macOS generic-password items where:
+  - service = `walleterm-<network>`
+  - account = field name like `delegated_seed`
 - For submission:
   - Channels mode requires `channels_base_url` and API key (from config or flags).
   - RPC mode only requires `rpc_url` and `network_passphrase`.

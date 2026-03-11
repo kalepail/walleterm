@@ -69,7 +69,7 @@ describe("submit unit", () => {
     expect(submitTxSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves op:// refs from override and network config", async () => {
+  it("resolves supported secret refs from override and network config", async () => {
     vi.spyOn(ChannelsClient.prototype, "submitTransaction").mockResolvedValue({
       hash: "tx-hash",
       status: "confirmed",
@@ -102,6 +102,18 @@ describe("submit unit", () => {
       {},
     );
     expect(resolveSpy).toHaveBeenCalledWith("op://vault/item/network_key");
+
+    await submitViaChannels(
+      { kind: "tx", envelope: { toXDR: () => "CCCC" } } as never,
+      {
+        rpc_url: "https://rpc.invalid",
+        network_passphrase: Networks.TESTNET,
+        channels_base_url: "https://channels.example",
+      },
+      resolver,
+      { channelsApiKeyRef: "keychain://walleterm-testnet/channels_api_key" },
+    );
+    expect(resolveSpy).toHaveBeenCalledWith("keychain://walleterm-testnet/channels_api_key");
   });
 
   it("handles bundle and auth submission validation", async () => {

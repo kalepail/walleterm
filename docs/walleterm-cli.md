@@ -39,10 +39,16 @@ Live test commands:
 ```bash
 bun run test:live
 bun run test:live:op
+bun run test:live:keychain
 bun run test:live:all
 ```
 
 Config details are documented in `docs/walleterm-config.md` and the full annotated template `walleterm.example.toml`.
+
+Supported secret-ref schemes:
+
+- `op://...` for 1Password
+- `keychain://...` for the macOS keychain
 
 If using 1Password refs (`op://...`), sign in first:
 
@@ -56,6 +62,7 @@ Or run with `op run --`.
 
 If you want the smallest useful command set, start with:
 - `setup op`
+- `setup keychain`
 - `wallet lookup`
 - `wallet signer`
 - `wallet create`
@@ -147,15 +154,58 @@ bun src/cli.ts setup op \
   --json
 ```
 
+### macOS keychain bootstrap wizard
+
+Bootstrap wallet secrets into the macOS keychain:
+
+```bash
+bun src/cli.ts setup keychain --json
+```
+
+Defaults:
+- service: `walleterm-testnet` for `testnet`, `walleterm-mainnet` for `mainnet`
+- network: `testnet`
+- generated entries:
+  - `delegated_seed`
+  - `channels_api_key`
+
+The command will:
+- verify the macOS `security` CLI is available
+- fail if the target service/account entries already exist unless you pass `--force`
+- use smart-account-kit deterministic deployer by default
+- generate delegated key if not provided
+- auto-generate Channels API key for `testnet` and `mainnet` if not provided
+
+Optional: store deployer seed in the keychain:
+
+```bash
+bun src/cli.ts setup keychain --include-deployer-seed --json
+```
+
+Use a custom keychain file:
+
+```bash
+bun src/cli.ts setup keychain \
+  --service walleterm-mainnet \
+  --keychain /Users/me/Library/Keychains/login.keychain-db \
+  --network mainnet \
+  --json
+```
+
 ### Wallet discovery and signer inspection
 
-Preferred one-shot lookup from 1Password:
+Preferred one-shot lookup from a secret provider:
 
 ```bash
 bun src/cli.ts wallet lookup \
   --config ./walleterm.toml \
   --network testnet \
   --secret-ref op://Private/walleterm-testnet/delegated_seed
+
+bun src/cli.ts wallet lookup \
+  --config ./walleterm.toml \
+  --network testnet \
+  --secret-ref keychain://walleterm-testnet/delegated_seed
 ```
 
 Other lookup modes:
@@ -174,7 +224,7 @@ Generate a new signer keypair:
 bun src/cli.ts wallet signer generate
 ```
 
-Add delegated signer from 1Password:
+Add delegated signer from a secret provider:
 
 ```bash
 bun src/cli.ts wallet signer add \
@@ -183,7 +233,7 @@ bun src/cli.ts wallet signer add \
   --out ./add-delegated.bundle.json
 ```
 
-Add external Ed25519 signer from 1Password:
+Add external Ed25519 signer from a secret provider:
 
 ```bash
 bun src/cli.ts wallet signer add \
@@ -248,7 +298,7 @@ Notes:
 - `--skip-prepare` is available for offline/dry flows.
 - Command prints derived `contract_id` in stdout JSON.
 
-### Network config for Channels + 1Password
+### Network config for Channels + secret providers
 
 You can store Channels credentials in config and resolve from 1Password:
 
@@ -264,6 +314,18 @@ channels_api_key_ref = "op://vault/oz-relayer/testnet_api_key"
 
 Then `submit` or `wallet create --submit` can omit `--channels-*` flags.
 `wallet create` will also automatically use `deployer_secret_ref` when present.
+
+The same network config can use the macOS keychain instead:
+
+```toml
+[networks.testnet]
+rpc_url = "https://soroban-rpc.testnet.stellar.gateway.fm"
+network_passphrase = "Test SDF Network ; September 2015"
+channels_base_url = "https://channels.openzeppelin.com/testnet"
+channels_api_key_ref = "keychain://walleterm-testnet/channels_api_key"
+# Optional deployer override:
+# deployer_secret_ref = "keychain://walleterm-testnet/deployer_seed"
+```
 
 ## Tests
 

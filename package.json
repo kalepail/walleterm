@@ -23,7 +23,8 @@
     "coverage": "bun x vitest run --coverage",
     "test:live": "WALLETERM_LIVE=1 bun x vitest run --coverage=false tests/live/wallet-live.test.ts",
     "test:live:op": "WALLETERM_LIVE=1 WALLETERM_LIVE_OP=1 bun x vitest run --coverage=false tests/live/op-live.test.ts",
-    "test:live:all": "WALLETERM_LIVE=1 WALLETERM_LIVE_OP=1 bun x vitest run --coverage=false",
+    "test:live:keychain": "WALLETERM_LIVE=1 WALLETERM_LIVE_KEYCHAIN=1 bun x vitest run --coverage=false tests/live/keychain-live.test.ts",
+    "test:live:all": "WALLETERM_LIVE=1 WALLETERM_LIVE_OP=1 WALLETERM_LIVE_KEYCHAIN=1 bun x vitest run --coverage=false",
     "install:ci": "bun install --frozen-lockfile"
   },
   "dependencies": {

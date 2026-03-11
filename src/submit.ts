@@ -2,7 +2,7 @@ import { ChannelsClient } from "@openzeppelin/relayer-plugin-channels";
 import { TransactionBuilder, rpc } from "@stellar/stellar-sdk";
 import type { NetworkConfig } from "./config.js";
 import type { ParsedInput } from "./core.js";
-import { SecretResolver } from "./secrets.js";
+import { SecretResolver, looksLikeSecretRef } from "./secrets.js";
 
 export interface SubmitNetworkOverrides {
   channelsBaseUrl?: string;
@@ -20,8 +20,16 @@ export interface SubmitResult {
 }
 
 function readDirectOrSecretRef(raw: string, resolver: SecretResolver): Promise<string> {
-  if (raw.startsWith("op://")) {
+  if (resolver.isSupportedRef(raw)) {
     return resolver.resolve(raw);
+  }
+  if (looksLikeSecretRef(raw)) {
+    throw new Error(
+      `Unsupported secret ref '${raw}'. Supported schemes: ${resolver
+        .supportedSchemes()
+        .map((value) => `${value}://`)
+        .join(", ")}.`,
+    );
   }
   return Promise.resolve(raw);
 }

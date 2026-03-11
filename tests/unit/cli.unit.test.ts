@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   mockWriteOutput: vi.fn(),
   mockLoadConfig: vi.fn(),
   mockResolveNetwork: vi.fn(),
+  mockDefaultServiceForNetwork: vi.fn(),
+  mockSetupMacOSKeychainForWallet: vi.fn(),
   mockDefaultItemForNetwork: vi.fn(),
   mockSetupOnePasswordForWallet: vi.fn(),
   mockSubmitTxXdrViaRpc: vi.fn(),
@@ -42,6 +44,8 @@ const {
   mockSignInput,
   mockLoadConfig,
   mockResolveNetwork,
+  mockDefaultServiceForNetwork,
+  mockSetupMacOSKeychainForWallet,
   mockDefaultItemForNetwork,
   mockSetupOnePasswordForWallet,
   mockSubmitTxXdrViaRpc,
@@ -74,6 +78,11 @@ vi.mock("../../src/core.js", () => ({
 vi.mock("../../src/config.js", () => ({
   loadConfig: mocks.mockLoadConfig,
   resolveNetwork: mocks.mockResolveNetwork,
+}));
+
+vi.mock("../../src/keychain-setup.js", () => ({
+  defaultServiceForNetwork: mocks.mockDefaultServiceForNetwork,
+  setupMacOSKeychainForWallet: mocks.mockSetupMacOSKeychainForWallet,
 }));
 
 vi.mock("../../src/op-setup.js", () => ({
@@ -218,6 +227,7 @@ beforeEach(() => {
   mockListSignerConfig.mockReturnValue({ account: "treasury", external: [], delegated: [] });
 
   mockDefaultItemForNetwork.mockReturnValue("walleterm-testnet");
+  mockDefaultServiceForNetwork.mockReturnValue("walleterm-testnet");
   mockSetupOnePasswordForWallet.mockResolvedValue({
     vault: "Private",
     item: "walleterm-testnet",
@@ -231,6 +241,19 @@ beforeEach(() => {
     refs: {
       delegated_seed_ref: "op://Private/walleterm-testnet/delegated_seed",
       channels_api_key_ref: "op://Private/walleterm-testnet/channels_api_key",
+    },
+    config_snippet: "[networks.testnet]",
+  });
+  mockSetupMacOSKeychainForWallet.mockResolvedValue({
+    service: "walleterm-testnet",
+    network: "testnet",
+    security_bin: "security",
+    deployer_seed_stored: false,
+    deployer_public_key: Keypair.random().publicKey(),
+    delegated_public_key: Keypair.random().publicKey(),
+    refs: {
+      delegated_seed_ref: "keychain://walleterm-testnet/delegated_seed",
+      channels_api_key_ref: "keychain://walleterm-testnet/channels_api_key",
     },
     config_snippet: "[networks.testnet]",
   });
@@ -405,6 +428,39 @@ describe("cli unit", () => {
     await run(["setup", "op", "--include-deployer-seed", "--json"]);
     expect(mockSetupOnePasswordForWallet).toHaveBeenCalledWith(
       expect.objectContaining({ includeDeployerSeed: true }),
+    );
+  });
+
+  it("setup keychain uses service defaults and prints verbose output", async () => {
+    const res = await run(["setup", "keychain", "--network", "testnet"]);
+    expect(mockDefaultServiceForNetwork).toHaveBeenCalledWith("testnet");
+    expect(mockSetupMacOSKeychainForWallet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        service: "walleterm-testnet",
+        network: "testnet",
+      }),
+    );
+    expect(res.stderr).toContain("macOS keychain wallet bootstrap complete.");
+    expect(JSON.parse(res.stdout).service).toBe("walleterm-testnet");
+  });
+
+  it("setup keychain forwards explicit options", async () => {
+    await run([
+      "setup",
+      "keychain",
+      "--service",
+      "custom-service",
+      "--keychain",
+      "/tmp/custom.keychain-db",
+      "--include-deployer-seed",
+      "--json",
+    ]);
+    expect(mockSetupMacOSKeychainForWallet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        service: "custom-service",
+        keychain: "/tmp/custom.keychain-db",
+        includeDeployerSeed: true,
+      }),
     );
   });
 

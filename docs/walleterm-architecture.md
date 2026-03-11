@@ -4,7 +4,7 @@
 Build a CLI signer for OpenZeppelin Stellar multisig smart accounts (Ed25519 external signers + delegated signers) that:
 - accepts unsigned or partially signed XDR,
 - reviews what is being signed,
-- signs any signable payloads using keys stored in 1Password,
+- signs any signable payloads using keys resolved from a supported secret store,
 - outputs signed XDR,
 - optionally submits via OpenZeppelin Channels relayer.
 
@@ -16,7 +16,9 @@ Build a CLI signer for OpenZeppelin Stellar multisig smart accounts (Ed25519 ext
   - transaction envelope XDR,
   - `SorobanAuthorizationEntry` XDR,
   - auth entries embedded in `invokeHostFunction` operations in a transaction envelope.
-- Supported secret backend: 1Password secret references resolved at runtime.
+- Supported secret backends:
+  - 1Password secret references resolved at runtime
+  - macOS keychain secret references resolved at runtime
 - Supported submit backends:
   - OpenZeppelin Channels hosted endpoints,
   - optional self-hosted `relayer-plugin-channels` endpoint.
@@ -47,7 +49,7 @@ Contract verification:
   - Main v0 flow. Signs all eligible payloads and writes signed output.
 - `walleterm submit --network <name> --in <signed_xdr_or_bundle> [--wait|--no-wait]`
   - Optional relay submit path.
-- `walleterm wallet lookup --secret-ref <op://...>` or `--account <alias>` or `--address <G...|C...>`
+- `walleterm wallet lookup --secret-ref <ref>` or `--account <alias>` or `--address <G...|C...>`
   - Primary wallet discovery/introspection flow.
 - `walleterm wallet signer generate`
   - Generates a Stellar signer keypair.
@@ -118,16 +120,27 @@ Contract behavior this aligns with:
   - on-chain wasm hash vs expected hash,
   - configured signer set overlap.
 
-## 1Password Integration
-Two supported runtime patterns:
+## Credential Provider Integration
+Runtime secret resolution is provider-backed and ref-based.
+
+Current supported providers:
+- 1Password via `op://...`
+- macOS keychain via `keychain://...`
+
+Two supported 1Password runtime patterns:
 
 1) Direct `op read` resolution
-- Config stores only secret references, e.g. `op://vault/item/field`.
+- Config stores secret refs like `op://vault/item/field`.
 - CLI resolves at runtime and keeps secrets in memory only.
 
 2) `op run` environment injection
 - Users launch CLI via `op run -- walleterm ...`.
 - CLI reads key material from env vars mapped in config.
+
+macOS keychain runtime pattern:
+- Config stores refs like `keychain://walleterm-testnet/delegated_seed`.
+- CLI resolves them through macOS `security find-generic-password`.
+- Optional `?keychain=<path>` query selects a custom keychain file.
 
 Security constraints:
 - Never persist resolved secret values.
@@ -135,6 +148,8 @@ Security constraints:
 - Validate that resolved secret derives to configured public key.
 - Accept only Stellar secret seeds (`S...`) for signer keys.
 - Prefer 1Password service accounts for automated non-interactive runs.
+- The current macOS keychain backend uses the system `security` CLI, which gives standard unlocked-keychain behavior rather than 1Password-style per-read approval prompts.
+- Keep provider setup/bootstrap commands separate from runtime resolution because write semantics vary by store.
 
 ## Relayer Integration
 Default behavior:
@@ -144,7 +159,7 @@ Default behavior:
 ### Channels Hosted Mode (recommended)
 - Mainnet base URL: `https://channels.openzeppelin.com`
 - Testnet base URL: `https://channels.openzeppelin.com/testnet`
-- API key from 1Password secret reference.
+- API key from a provider-backed secret reference or direct CLI override.
 
 Submission methods:
 - `submitTransaction({ xdr })` for complete signed envelope.
@@ -163,13 +178,13 @@ Top-level sections:
 - `[[smart_accounts.<alias>.delegated_signers]]`
   - `name`
   - `address` (G-address)
-  - `secret_ref` (1Password secret reference to Stellar seed)
+  - `secret_ref` (provider-backed secret reference to Stellar seed)
   - `enabled`
 - `[[smart_accounts.<alias>.external_signers]]`
   - `name`
   - `verifier_contract_id`
   - `public_key_hex` (32-byte Ed25519 pubkey)
-  - `secret_ref` (1Password secret reference)
+  - `secret_ref` (provider-backed secret reference)
   - `enabled`
 
 Validation rules:

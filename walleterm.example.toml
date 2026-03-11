@@ -10,6 +10,10 @@
 # Quick bootstrap for 1Password defaults:
 #   bun run cli setup op --network testnet
 #   bun run cli setup op --network mainnet
+#
+# Quick bootstrap for macOS keychain defaults:
+#   bun run cli setup keychain --network testnet
+#   bun run cli setup keychain --network mainnet
 
 [app]
 # Required: default network name.
@@ -39,11 +43,14 @@ network_passphrase = "Test SDF Network ; September 2015"
 indexer_url = "https://smart-account-indexer.sdf-ecosystem.workers.dev"
 channels_base_url = "https://channels.openzeppelin.com/testnet"
 
-# Optional: op:// ref OR direct key string.
+# Optional: provider-backed secret ref OR direct key string.
 channels_api_key_ref = "op://Private/walleterm-testnet/channels_api_key"
+# Example macOS keychain equivalent:
+# channels_api_key_ref = "keychain://walleterm-testnet/channels_api_key"
 
 # Optional: only set if intentionally not using deterministic deployer.
 # deployer_secret_ref = "op://Private/walleterm-testnet/deployer_seed"
+# deployer_secret_ref = "keychain://walleterm-testnet/deployer_seed"
 
 [networks.mainnet]
 # Required
@@ -78,6 +85,8 @@ name = "delegate_1"
 address = "GTODOCHANGE1234567890"
 # setup op default field example:
 secret_ref = "op://Private/walleterm-testnet/delegated_seed"
+# setup keychain default field example:
+# secret_ref = "keychain://walleterm-testnet/delegated_seed"
 enabled = true
 
 # Example second delegated signer in a separate item/field:

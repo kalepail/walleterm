@@ -4,7 +4,7 @@
 
 It is not a long-running daemon/service. The default model is:
 1. review unsigned payload
-2. sign what you can with configured keys (`op://` from 1Password)
+2. sign what you can with configured keys from a supported secret store
 3. optionally submit via relayer (Channels) or RPC
 
 ## What It Does
@@ -15,12 +15,14 @@ It is not a long-running daemon/service. The default model is:
   - delegated signers (`G...`)
   - external Ed25519 signer map entries
 - Manages wallet/signer flows (lookup, deploy, add/remove signers)
-- Integrates with 1Password CLI (`op`) for key material
+- Resolves key material from pluggable secret providers
 
 ## Prereqs
 
 - [Bun](https://bun.com/)
-- Optional but recommended: [1Password CLI](https://developer.1password.com/docs/cli/)
+- Optional:
+  - [1Password CLI](https://developer.1password.com/docs/cli/)
+  - macOS `security` CLI (built into macOS)
 - Stellar testnet/mainnet RPC access (defaults are in config)
 
 ## Quick Start
@@ -38,10 +40,16 @@ op signin
 bun run cli setup op --network testnet
 ```
 
+If using the macOS keychain:
+
+```bash
+bun run cli setup keychain --network testnet
+```
+
 Then update `walleterm.toml` with your real contract IDs and signer configuration.
 
 The simplest mental model is:
-1. `setup op`
+1. `setup op` or `setup keychain`
 2. `wallet lookup`
 3. `wallet create` or `wallet signer add/remove`
 4. `review`
@@ -80,9 +88,10 @@ Preferred introspection flow:
 
 ```bash
 bun run cli wallet lookup --config ./walleterm.toml --network testnet --secret-ref op://Private/walleterm-testnet/delegated_seed
+bun run cli wallet lookup --config ./walleterm.toml --network testnet --secret-ref keychain://walleterm-testnet/delegated_seed
 ```
 
-That command resolves the seed from 1Password, derives the signer identity, reverse-lookups matching wallets, and returns the signers each wallet currently contains.
+That command resolves the seed from the configured secret provider, derives the signer identity, reverse-lookups matching wallets, and returns the signers each wallet currently contains.
 
 Deploy wallet tx:
 
@@ -95,7 +104,7 @@ bun run cli wallet create \
   --out ./deploy.tx.xdr
 ```
 
-Add a delegated signer from 1Password:
+Add a delegated signer from a secret provider:
 
 ```bash
 bun run cli wallet signer add \
@@ -106,7 +115,7 @@ bun run cli wallet signer add \
   --out ./add-signer.bundle.json
 ```
 
-Add an external Ed25519 signer from 1Password:
+Add an external Ed25519 signer from a secret provider:
 
 ```bash
 bun run cli wallet signer add \
@@ -125,6 +134,7 @@ bun run cli --help
 bun run cli wallet --help
 bun run cli wallet signer --help
 bun run cli setup op --help
+bun run cli setup keychain --help
 ```
 
 ## Testing
@@ -141,3 +151,4 @@ bun run test:live:all
 - TOML config reference: [docs/walleterm-config.md](/Users/kalepail/Desktop/walleterm/docs/walleterm-config.md)
 - CLI usage details: [docs/walleterm-cli.md](/Users/kalepail/Desktop/walleterm/docs/walleterm-cli.md)
 - Architecture and signing model: [docs/walleterm-architecture.md](/Users/kalepail/Desktop/walleterm/docs/walleterm-architecture.md)
+- Credential-provider design: [docs/credential-providers.md](/Users/kalepail/Desktop/walleterm/docs/credential-providers.md)

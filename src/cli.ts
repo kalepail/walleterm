@@ -13,6 +13,7 @@ import {
   writeOutput,
 } from "./core.js";
 import { loadConfig, resolveNetwork } from "./config.js";
+import { defaultServiceForNetwork, setupMacOSKeychainForWallet } from "./keychain-setup.js";
 import { SecretResolver } from "./secrets.js";
 import { defaultItemForNetwork, setupOnePasswordForWallet } from "./op-setup.js";
 import { submitTxXdrViaRpc, submitViaChannels, type SubmitNetworkOverrides } from "./submit.js";
@@ -102,6 +103,18 @@ interface SetupOpOpts {
   includeDeployerSeed?: boolean;
   force?: boolean;
   createVault: boolean;
+  json?: boolean;
+}
+
+interface SetupKeychainOpts {
+  service?: string;
+  network: string;
+  keychain?: string;
+  deployerSeed?: string;
+  delegatedSeed?: string;
+  channelsApiKey?: string;
+  includeDeployerSeed?: boolean;
+  force?: boolean;
   json?: boolean;
 }
 
@@ -329,8 +342,9 @@ program
       "  walleterm sign --in ./unsigned.json --out ./signed.json",
       "  walleterm submit --in ./signed.json --mode channels",
       "  walleterm wallet lookup --secret-ref op://Private/walleterm-testnet/delegated_seed",
+      "  walleterm wallet lookup --secret-ref keychain://walleterm-testnet/delegated_seed",
       "  walleterm wallet create --wasm-hash <hash> --delegated-address G... --out ./deploy.tx.xdr",
-      "  walleterm wallet signer add --account treasury --secret-ref op://... --out ./add.bundle.json",
+      "  walleterm wallet signer add --account treasury --secret-ref <ref> --out ./add.bundle.json",
     ].join("\n"),
   )
   .showHelpAfterError();
@@ -439,7 +453,7 @@ program
   .option("--mode <mode>", "channels|rpc", "channels")
   .option("--channels-base-url <url>", "override channels base URL")
   .option("--channels-api-key <key>", "direct channels API key")
-  .option("--channels-api-key-ref <ref>", "channels API key or op:// ref")
+  .option("--channels-api-key-ref <ref>", "channels API key secret ref")
   .option("--plugin-id <id>", "channels plugin id (self-hosted relayer mode)")
   .action(async (opts: SubmitOpts) => {
     const config = loadConfig(opts.config);
@@ -539,6 +553,57 @@ setup
     process.stdout.write(`${JSON.stringify(result)}\n`);
   });
 
+setup
+  .command("keychain")
+  .description("bootstrap macOS keychain secrets for wallet creation/signing")
+  .option(
+    "--service <name>",
+    "macOS keychain service name (default: walleterm-testnet or walleterm-mainnet by network)",
+  )
+  .option("--network <name>", "network context (used for defaults)", "testnet")
+  .option("--keychain <path>", "custom keychain path (defaults to the login keychain)")
+  .option("--deployer-seed <seed>", "existing deployer S... seed (if provided, it will be stored)")
+  .option("--delegated-seed <seed>", "existing delegated S... seed (defaults to generated)")
+  .option(
+    "--channels-api-key <key>",
+    "channels API key (defaults to auto-generated on testnet/mainnet)",
+  )
+  .option(
+    "--include-deployer-seed",
+    "store deployer seed in the macOS keychain (default uses smart-account-kit deterministic deployer)",
+    false,
+  )
+  .option("--force", "overwrite existing keychain entries", false)
+  .option("--json", "print only json output", false)
+  .action(async (opts: SetupKeychainOpts) => {
+    const networkName = opts.network;
+    const result = await setupMacOSKeychainForWallet({
+      service: opts.service ?? defaultServiceForNetwork(networkName),
+      network: networkName,
+      keychain: opts.keychain,
+      deployerSeed: opts.deployerSeed,
+      delegatedSeed: opts.delegatedSeed,
+      channelsApiKey: opts.channelsApiKey,
+      includeDeployerSeed: opts.includeDeployerSeed ? true : undefined,
+      overwriteExisting: Boolean(opts.force),
+    });
+
+    if (!opts.json) {
+      process.stderr.write("macOS keychain wallet bootstrap complete.\n");
+      process.stderr.write(
+        `deployer_public_key=${result.deployer_public_key}\n` +
+          `delegated_public_key=${result.delegated_public_key}\n`,
+      );
+      process.stderr.write(
+        `refs: ${result.refs.deployer_seed_ref ?? "(not stored)"}, ${result.refs.delegated_seed_ref}, ${result.refs.channels_api_key_ref}\n`,
+      );
+      process.stderr.write("config snippet:\n");
+      process.stderr.write(`${result.config_snippet}\n`);
+    }
+
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  });
+
 const wallet = program
   .command("wallet")
   .description("OpenZeppelin smart-account wallet management")
@@ -548,9 +613,10 @@ const wallet = program
       "",
       "Primary wallet flows:",
       "  walleterm wallet lookup --secret-ref op://Private/walleterm-testnet/delegated_seed",
+      "  walleterm wallet lookup --secret-ref keychain://walleterm-testnet/delegated_seed",
       "  walleterm wallet create --wasm-hash <hash> --delegated-address G... --out ./deploy.tx.xdr",
-      "  walleterm wallet signer add --account treasury --secret-ref op://... --out ./add.bundle.json",
-      "  walleterm wallet signer remove --account treasury --secret-ref op://... --out ./remove.bundle.json",
+      "  walleterm wallet signer add --account treasury --secret-ref <ref> --out ./add.bundle.json",
+      "  walleterm wallet signer remove --account treasury --secret-ref <ref> --out ./remove.bundle.json",
     ].join("\n"),
   );
 
@@ -560,7 +626,7 @@ wallet
   .option("--account <alias>", "configured smart account alias")
   .option("--address <stellar-address>", "G... or C... address")
   .option("--contract-id <contract-id>", "smart account contract C-address")
-  .option("--secret-ref <op-ref>", "1Password op:// ref to Stellar secret seed")
+  .option("--secret-ref <ref>", "secret ref to Stellar secret seed")
   .option("--config <path>", "config TOML path", "walleterm.toml")
   .option("--network <name>", "network name")
   .option("--indexer-url <url>", "override indexer base URL")
@@ -715,7 +781,7 @@ signer
   .option("--network <name>", "network name")
   .option("--ttl-seconds <n>", "auth ttl in seconds")
   .option("--latest-ledger <n>", "override latest ledger sequence")
-  .option("--secret-ref <op-ref>", "derive signer identity from 1Password seed")
+  .option("--secret-ref <ref>", "derive signer identity from secret ref")
   .option("--delegated-address <g-address>", "delegated signer G-address")
   .option("--verifier-contract-id <contract-id>", "verifier contract C-address")
   .option("--public-key-hex <hex>", "32-byte ed25519 public key hex")
@@ -733,7 +799,7 @@ signer
   .option("--network <name>", "network name")
   .option("--ttl-seconds <n>", "auth ttl in seconds")
   .option("--latest-ledger <n>", "override latest ledger sequence")
-  .option("--secret-ref <op-ref>", "derive signer identity from 1Password seed")
+  .option("--secret-ref <ref>", "derive signer identity from secret ref")
   .option("--delegated-address <g-address>", "delegated signer G-address")
   .option("--verifier-contract-id <contract-id>", "verifier contract C-address")
   .option("--public-key-hex <hex>", "32-byte ed25519 public key hex")
@@ -745,7 +811,7 @@ wallet
   .command("create")
   .description("build a deployment transaction for a new OZ smart account")
   .option(
-    "--deployer-secret-ref <op-ref>",
+    "--deployer-secret-ref <ref>",
     "override deployer seed (default uses smart-account-kit deterministic deployer)",
   )
   .option(
@@ -771,7 +837,7 @@ wallet
   .option("--submit-mode <mode>", "channels|rpc")
   .option("--channels-base-url <url>", "override channels base URL")
   .option("--channels-api-key <key>", "direct channels API key")
-  .option("--channels-api-key-ref <ref>", "channels API key or op:// ref")
+  .option("--channels-api-key-ref <ref>", "channels API key secret ref")
   .option("--plugin-id <id>", "channels plugin id (self-hosted relayer mode)")
   .action(async (opts: WalletCreateOpts) => {
     const config = loadConfig(opts.config);
