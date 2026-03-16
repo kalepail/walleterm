@@ -64,6 +64,10 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
+function redactSecurityArgs(args: string[]): string[] {
+  return args.map((arg, i) => (i > 0 && args[i - 1] === "-w" ? "[REDACTED]" : arg));
+}
+
 async function runSecurity(
   securityBin: string,
   args: string[],
@@ -77,7 +81,9 @@ async function runSecurity(
     });
     return stdout.trim();
   } catch (error) {
-    throw new Error(`'${securityBin} ${fullArgs.join(" ")}' failed: ${errorMessage(error)}`);
+    throw new Error(
+      `'${securityBin} ${redactSecurityArgs(fullArgs).join(" ")}' failed: ${errorMessage(error)}`,
+    );
   }
 }
 

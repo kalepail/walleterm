@@ -57,6 +57,10 @@ function errorMessage(err: unknown): string {
 }
 /* c8 ignore stop */
 
+function redactOpArgs(args: string[]): string[] {
+  return args.map((arg) => arg.replace(/\[password\]=[^\s]+/g, "[password]=[REDACTED]"));
+}
+
 async function runOp(opBin: string, args: string[]): Promise<string> {
   try {
     const { stdout } = await execFileAsync(opBin, args, {
@@ -65,7 +69,7 @@ async function runOp(opBin: string, args: string[]): Promise<string> {
     });
     return stdout.trim();
   } catch (err) {
-    throw new Error(`'${opBin} ${args.join(" ")}' failed: ${errorMessage(err)}`);
+    throw new Error(`'${opBin} ${redactOpArgs(args).join(" ")}' failed: ${errorMessage(err)}`);
   }
 }
 

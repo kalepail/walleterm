@@ -40,6 +40,11 @@ function execCommand(bin: string, args: string[]): Promise<{ stdout: string; std
   });
 }
 
+function truncateErrorMessage(error: unknown, maxLen = 200): string {
+  const msg = String(error);
+  return msg.length > maxLen ? `${msg.slice(0, maxLen)}…` : msg;
+}
+
 export function looksLikeSecretRef(raw: string): boolean {
   return refScheme(raw) !== null;
 }
@@ -91,7 +96,7 @@ export class OnePasswordSecretProvider implements SecretProvider {
       ({ stdout } = await execCommand(this.opBin, ["read", ref]));
     } catch (error) {
       throw new Error(
-        `Failed resolving 1Password ref '${ref}' using '${this.opBin} read': ${String(error)}`,
+        `Failed resolving 1Password ref '${ref}' using '${this.opBin} read': ${truncateErrorMessage(error)}`,
       );
     }
 
@@ -123,7 +128,7 @@ export class MacOSKeychainSecretProvider implements SecretProvider {
       ({ stdout } = await execCommand(this.securityBin, args));
     } catch (error) {
       throw new Error(
-        `Failed resolving macOS keychain ref '${ref}' using '${this.securityBin} ${args.join(" ")}': ${String(error)}`,
+        `Failed resolving macOS keychain ref '${ref}' using '${this.securityBin} find-generic-password': ${truncateErrorMessage(error)}`,
       );
     }
 

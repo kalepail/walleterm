@@ -11,3 +11,10 @@ coverage-c8/
 .DS_Store
 x402-art/
 walleterm.toml
+
+# Crypto/wallet artifacts
+*.xdr
+*.seed
+*.key
+*.pem
+*.bundle.json

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { Address, Keypair, TransactionBuilder, hash, rpc, xdr } from "@stellar/stellar-sdk";
 import type {
@@ -438,7 +439,7 @@ function sortMapEntries(entries: xdr.ScMapEntry[]): void {
 }
 
 function randomNonceInt64(): xdr.Int64 {
-  const raw = Buffer.from(hash(Buffer.from(String(Date.now() + Math.random())))).subarray(0, 8);
+  const raw = randomBytes(8);
   const value = BigInt(`0x${raw.toString("hex")}`) & ((1n << 63n) - 1n);
   return xdr.Int64.fromString(value.toString());
 }
@@ -997,7 +998,10 @@ export function signInput(
 }
 
 export function writeOutput(path: string, content: string): void {
-  writeFileSync(path, content.endsWith("\n") ? content : `${content}\n`, "utf8");
+  writeFileSync(path, content.endsWith("\n") ? content : `${content}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
 }
 
 export function resolveAccountForCommand(
