@@ -566,6 +566,7 @@ program
           paid: result.paid,
           status: result.status,
           payer: keypair.publicKey(),
+          response_headers: result.responseHeaders,
           payment_required: result.paymentRequired,
           payment_payload: result.paymentPayload,
           settlement: result.settlement,
@@ -573,6 +574,10 @@ program
         })}\n`,
       );
     } else {
+      const contentType = result.responseHeaders["content-type"];
+      if (contentType) {
+        process.stderr.write(`content-type: ${contentType}\n`);
+      }
       process.stdout.write(Buffer.from(result.body));
     }
   });
