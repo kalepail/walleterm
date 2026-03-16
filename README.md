@@ -1,5 +1,9 @@
 # walleterm
 
+> [!WARNING]
+> **Experimental software — use at your own risk.**
+> This tool has not been formally audited by a third party. It interacts with live blockchain networks and manages cryptographic signing keys. Do not use it with funds you cannot afford to lose. Review the source code and security documentation before use.
+
 `walleterm` is a Bun CLI for OpenZeppelin Stellar smart-account operations.
 
 It is not a long-running daemon/service. The default model is:
@@ -28,7 +32,8 @@ It is not a long-running daemon/service. The default model is:
 ## Quick Start
 
 ```bash
-cd /Users/kalepail/Desktop/walleterm
+git clone <repo-url>
+cd walleterm
 bun install
 cp walleterm.example.toml walleterm.toml
 ```
@@ -148,7 +153,8 @@ bun run test:live:all
 
 ## Docs
 
-- TOML config reference: [docs/walleterm-config.md](/Users/kalepail/Desktop/walleterm/docs/walleterm-config.md)
-- CLI usage details: [docs/walleterm-cli.md](/Users/kalepail/Desktop/walleterm/docs/walleterm-cli.md)
-- Architecture and signing model: [docs/walleterm-architecture.md](/Users/kalepail/Desktop/walleterm/docs/walleterm-architecture.md)
-- Credential-provider design: [docs/credential-providers.md](/Users/kalepail/Desktop/walleterm/docs/credential-providers.md)
+- TOML config reference: [docs/walleterm-config.md](docs/walleterm-config.md)
+- CLI usage details: [docs/walleterm-cli.md](docs/walleterm-cli.md)
+- Architecture and signing model: [docs/walleterm-architecture.md](docs/walleterm-architecture.md)
+- Credential-provider design: [docs/credential-providers.md](docs/credential-providers.md)
+- Security: [docs/security-remediation-plan.md](docs/security-remediation-plan.md)

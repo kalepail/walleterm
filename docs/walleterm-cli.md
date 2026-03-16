@@ -3,7 +3,8 @@
 ## Install and run
 
 ```bash
-cd /Users/kalepail/Desktop/walleterm
+git clone <repo-url>
+cd walleterm
 bun install
 bun run build
 ```
