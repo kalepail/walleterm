@@ -119,7 +119,7 @@ describe("walleterm pay e2e", () => {
     ).rejects.toThrow(/secret-ref must resolve to a valid Stellar secret seed/);
   });
 
-  it("executes pay command with --output body", async () => {
+  it("executes pay command with --format body", async () => {
     const { configPath, env } = makeFixture();
     const result = await runCliInProcess(
       [
@@ -136,7 +136,7 @@ describe("walleterm pay e2e", () => {
     expect(vi.mocked(executeX402Request)).toHaveBeenCalledTimes(1);
   });
 
-  it("executes pay command with --output json", async () => {
+  it("executes pay command with --format json", async () => {
     const { configPath, env, keypair } = makeFixture();
     const result = await runCliInProcess(
       [
@@ -146,7 +146,7 @@ describe("walleterm pay e2e", () => {
         configPath,
         "--secret-ref",
         "keychain://walleterm-test/payer_seed",
-        "--output",
+        "--format",
         "json",
       ],
       env,
@@ -180,7 +180,7 @@ describe("walleterm pay e2e", () => {
         "--secret-ref",
         "keychain://walleterm-test/payer_seed",
         "--dry-run",
-        "--output",
+        "--format",
         "json",
       ],
       env,
@@ -244,7 +244,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     writeFileSync(configPath, config, "utf8");
 
     const result = await runCliInProcess(
-      ["pay", "https://example.com/resource", "--config", configPath, "--output", "json"],
+      ["pay", "https://example.com/resource", "--config", configPath, "--format", "json"],
       fake.env,
     );
     const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
@@ -372,5 +372,174 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(parsed.size).toBe(10);
     expect(parsed.content_type).toBe("image/png");
+  });
+
+  it("--out with no content-type header outputs null content_type", async () => {
+    const { configPath, env, keypair } = makeFixture();
+    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outPath = join(outDir, "output.bin");
+
+    vi.mocked(executeX402Request).mockResolvedValueOnce({
+      paid: true,
+      status: 200,
+      body: new TextEncoder().encode("data"),
+      responseHeaders: {},
+      paymentRequired: {
+        x402Version: 2,
+        resource: { url: "https://example.com" },
+        accepts: [],
+      },
+      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      settlement: {
+        success: true,
+        transaction: "txhash",
+        network: "stellar:testnet",
+      },
+    });
+
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--out",
+        outPath,
+      ],
+      env,
+    );
+
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.content_type).toBeNull();
+    expect(parsed.payer).toBe(keypair.publicKey());
+    expect(readFileSync(outPath, "utf8")).toBe("data");
+  });
+
+  it("--out with no settlement outputs null settlement", async () => {
+    const { configPath, env } = makeFixture();
+    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outPath = join(outDir, "output.bin");
+
+    vi.mocked(executeX402Request).mockResolvedValueOnce({
+      paid: true,
+      status: 200,
+      body: new TextEncoder().encode("data"),
+      responseHeaders: { "content-type": "text/plain" },
+      paymentRequired: {
+        x402Version: 2,
+        resource: { url: "https://example.com" },
+        accepts: [],
+      },
+      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+    });
+
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--out",
+        outPath,
+      ],
+      env,
+    );
+
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.settlement).toBeNull();
+    expect(parsed.content_type).toBe("text/plain");
+  });
+
+  it("--out takes priority over --format json", async () => {
+    const { configPath, env, keypair } = makeFixture();
+    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outPath = join(outDir, "output.bin");
+
+    vi.mocked(executeX402Request).mockResolvedValueOnce({
+      paid: true,
+      status: 200,
+      body: new TextEncoder().encode("file content"),
+      responseHeaders: { "content-type": "application/octet-stream" },
+      paymentRequired: {
+        x402Version: 2,
+        resource: { url: "https://example.com" },
+        accepts: [],
+      },
+      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      settlement: {
+        success: true,
+        transaction: "txhash",
+        network: "stellar:testnet",
+      },
+    });
+
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--out",
+        outPath,
+        "--format",
+        "json",
+      ],
+      env,
+    );
+
+    // --out summary format should be used, not --format json's full payload
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.file).toBe(outPath);
+    expect(parsed.payer).toBe(keypair.publicKey());
+    expect(parsed).not.toHaveProperty("response_headers");
+    expect(parsed).not.toHaveProperty("payment_required");
+    expect(readFileSync(outPath, "utf8")).toBe("file content");
+  });
+
+  it("--out with empty body writes zero-byte file", async () => {
+    const { configPath, env } = makeFixture();
+    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outPath = join(outDir, "empty.bin");
+
+    vi.mocked(executeX402Request).mockResolvedValueOnce({
+      paid: true,
+      status: 200,
+      body: new Uint8Array(0),
+      responseHeaders: { "content-type": "application/octet-stream" },
+      paymentRequired: {
+        x402Version: 2,
+        resource: { url: "https://example.com" },
+        accepts: [],
+      },
+      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      settlement: null as never,
+    });
+
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--out",
+        outPath,
+      ],
+      env,
+    );
+
+    const fileBytes = readFileSync(outPath);
+    expect(fileBytes.length).toBe(0);
+
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.size).toBe(0);
+    expect(parsed.file).toBe(outPath);
   });
 });

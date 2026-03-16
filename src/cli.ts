@@ -107,7 +107,7 @@ interface PayOpts {
   method: string;
   header: string[];
   data?: string;
-  output: string;
+  format: string;
   out?: string;
   dryRun: boolean;
 }
@@ -516,7 +516,7 @@ program
   .option("--data <body>", "request body")
   .option("--network <name>", "network name")
   .option("--secret-ref <ref>", "keypair secret ref to pay from")
-  .option("--output <mode>", "body | json", "body")
+  .option("--format <mode>", "body | json", "body")
   .option("--out <path>", "write response body to a file instead of stdout")
   .option("--dry-run", "show 402 details without paying", false)
   .option("--config <path>", "config TOML path", "walleterm.toml")
@@ -578,7 +578,7 @@ program
           settlement: result.settlement ?? null,
         })}\n`,
       );
-    } else if (opts.output === "json") {
+    } else if (opts.format === "json") {
       process.stdout.write(
         `${JSON.stringify({
           paid: result.paid,
