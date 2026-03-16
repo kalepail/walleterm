@@ -133,7 +133,45 @@ describe("walleterm pay e2e", () => {
       env,
     );
     expect(result.stdout).toBe("paid content");
+    // Default mock has no content-type header, so stderr should be empty
+    expect(result.stderr).toBe("");
     expect(vi.mocked(executeX402Request)).toHaveBeenCalledTimes(1);
+  });
+
+  it("--format body writes content-type to stderr when present", async () => {
+    const { configPath, env } = makeFixture();
+
+    vi.mocked(executeX402Request).mockResolvedValueOnce({
+      paid: true,
+      status: 200,
+      body: new TextEncoder().encode("image data"),
+      responseHeaders: { "content-type": "image/png" },
+      paymentRequired: {
+        x402Version: 2,
+        resource: { url: "https://example.com" },
+        accepts: [],
+      },
+      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      settlement: {
+        success: true,
+        transaction: "txhash",
+        network: "stellar:testnet",
+      },
+    });
+
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+      ],
+      env,
+    );
+    expect(result.stdout).toBe("image data");
+    expect(result.stderr).toBe("content-type: image/png\n");
   });
 
   it("executes pay command with --format json", async () => {
@@ -156,6 +194,18 @@ describe("walleterm pay e2e", () => {
     expect(parsed.status).toBe(200);
     expect(parsed.payer).toBe(keypair.publicKey());
     expect(parsed.body).toBe(Buffer.from("paid content").toString("base64"));
+    expect(parsed.response_headers).toEqual({});
+    expect(parsed.payment_required).toEqual({
+      x402Version: 2,
+      resource: { url: "https://example.com" },
+      accepts: [],
+    });
+    expect(parsed.payment_payload).toEqual({ x402Version: 2, accepted: {}, payload: {} });
+    expect(parsed.settlement).toEqual({
+      success: true,
+      transaction: "txhash",
+      network: "stellar:testnet",
+    });
   });
 
   it("passes dry-run option to executeX402Request", async () => {
