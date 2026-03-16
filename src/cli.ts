@@ -36,6 +36,7 @@ import {
   resolveIndexerUrl,
   smartAccountKitDeployerKeypair,
 } from "./wallet.js";
+import { writeFileSync } from "node:fs";
 
 interface BaseOpts {
   config: string;
@@ -107,6 +108,7 @@ interface PayOpts {
   header: string[];
   data?: string;
   output: string;
+  out?: string;
   dryRun: boolean;
 }
 
@@ -515,6 +517,7 @@ program
   .option("--network <name>", "network name")
   .option("--secret-ref <ref>", "keypair secret ref to pay from")
   .option("--output <mode>", "body | json", "body")
+  .option("--out <path>", "write response body to a file instead of stdout")
   .option("--dry-run", "show 402 details without paying", false)
   .option("--config <path>", "config TOML path", "walleterm.toml")
   .action(async (url: string, opts: PayOpts) => {
@@ -560,7 +563,22 @@ program
       fetchFn: fetch,
     });
 
-    if (opts.output === "json") {
+    if (opts.out) {
+      const bodyBuf = Buffer.from(result.body);
+      writeFileSync(opts.out, bodyBuf);
+      const contentType = result.responseHeaders["content-type"];
+      process.stdout.write(
+        `${JSON.stringify({
+          paid: result.paid,
+          status: result.status,
+          payer: keypair.publicKey(),
+          content_type: contentType ?? null,
+          size: bodyBuf.length,
+          file: opts.out,
+          settlement: result.settlement ?? null,
+        })}\n`,
+      );
+    } else if (opts.output === "json") {
       process.stdout.write(
         `${JSON.stringify({
           paid: result.paid,

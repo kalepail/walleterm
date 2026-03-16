@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Keypair } from "@stellar/stellar-sdk";
@@ -266,5 +266,111 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     );
     const callOpts = vi.mocked(executeX402Request).mock.calls[0]?.[1];
     expect(callOpts?.headers).toBeUndefined();
+  });
+
+  it("writes body to file and prints JSON summary with --out", async () => {
+    const { configPath, env, keypair } = makeFixture();
+    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outPath = join(outDir, "response.bin");
+
+    vi.mocked(executeX402Request).mockResolvedValueOnce({
+      paid: true,
+      status: 200,
+      body: new TextEncoder().encode("paid content"),
+      responseHeaders: { "content-type": "image/png" },
+      paymentRequired: {
+        x402Version: 2,
+        resource: { url: "https://example.com" },
+        accepts: [],
+      },
+      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      settlement: {
+        success: true,
+        transaction: "txhash",
+        network: "stellar:testnet",
+      },
+    });
+
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--out",
+        outPath,
+      ],
+      env,
+    );
+
+    // File should contain the raw body bytes
+    const fileContents = readFileSync(outPath, "utf8");
+    expect(fileContents).toBe("paid content");
+
+    // Stdout should be a JSON summary
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.paid).toBe(true);
+    expect(parsed.status).toBe(200);
+    expect(parsed.payer).toBe(keypair.publicKey());
+    expect(parsed.content_type).toBe("image/png");
+    expect(parsed.size).toBe(12); // "paid content" is 12 bytes
+    expect(parsed.file).toBe(outPath);
+    expect(parsed.settlement).toEqual({
+      success: true,
+      transaction: "txhash",
+      network: "stellar:testnet",
+    });
+  });
+
+  it("--out writes binary data without corruption", async () => {
+    const { configPath, env } = makeFixture();
+    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outPath = join(outDir, "binary.dat");
+
+    // Create binary content with bytes that would corrupt in text mode
+    const binaryBody = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]);
+
+    vi.mocked(executeX402Request).mockResolvedValueOnce({
+      paid: true,
+      status: 200,
+      body: binaryBody,
+      responseHeaders: { "content-type": "image/png" },
+      paymentRequired: {
+        x402Version: 2,
+        resource: { url: "https://example.com" },
+        accepts: [],
+      },
+      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      settlement: {
+        success: true,
+        transaction: "txhash",
+        network: "stellar:testnet",
+      },
+    });
+
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--out",
+        outPath,
+      ],
+      env,
+    );
+
+    // File should contain exact binary bytes
+    const fileBytes = new Uint8Array(readFileSync(outPath));
+    expect(fileBytes).toEqual(binaryBody);
+
+    // Summary should report correct size
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.size).toBe(10);
+    expect(parsed.content_type).toBe("image/png");
   });
 });
