@@ -365,7 +365,7 @@ program
       "  walleterm wallet create --wasm-hash <hash> --delegated-address G... --out ./deploy.tx.xdr",
       "  walleterm wallet signer add --account treasury --secret-ref <ref> --out ./add.bundle.json",
       "  walleterm pay https://api.example.com/resource --secret-ref op://Private/testnet/seed",
-      "  walleterm pay https://api.example.com/resource --dry-run --output json",
+      "  walleterm pay https://api.example.com/resource --dry-run --format json",
     ].join("\n"),
   )
   .showHelpAfterError();
