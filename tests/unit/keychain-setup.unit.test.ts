@@ -127,6 +127,52 @@ describe("keychain setup unit", () => {
     }
   });
 
+  it("redacts -w secret values in error messages", async () => {
+    const root = mkdtempSync(join(tmpdir(), "walleterm-keychain-redact-"));
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const securityBin = join(binDir, "security");
+
+    writeFileSync(
+      securityBin,
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "help") { process.exit(0); }
+if (args[0] === "find-generic-password") { process.exit(1); }
+if (args[0] === "add-generic-password") {
+  process.stderr.write("simulated error");
+  process.exit(1);
+}
+process.exit(1);
+`,
+      "utf8",
+    );
+    chmodSync(securityBin, 0o755);
+
+    const result = setupMacOSKeychainForWallet({
+      securityBin,
+      service: "walleterm-testnet",
+      network: "testnet",
+      channelsApiKey: "manual-key",
+      overwriteExisting: true,
+      includeDeployerSeed: true,
+      deployerSeed: "SBKZYLIJ3LKRJJQVDKYRHGUGZ3IJZIVAX2USAF5HSMH2WSOQKLJEWTXA",
+    });
+
+    await expect(result).rejects.toThrow("[REDACTED]");
+    await expect(
+      setupMacOSKeychainForWallet({
+        securityBin,
+        service: "walleterm-testnet",
+        network: "testnet",
+        channelsApiKey: "manual-key",
+        overwriteExisting: true,
+        includeDeployerSeed: true,
+        deployerSeed: "SBKZYLIJ3LKRJJQVDKYRHGUGZ3IJZIVAX2USAF5HSMH2WSOQKLJEWTXA",
+      }),
+    ).rejects.not.toThrow("SBKZYLIJ3LKRJJQVDKYRHGUGZ3IJZIVAX2USAF5HSMH2WSOQKLJEWTXA");
+  });
+
   it("falls back to default 'security' binary name when option/env are unset", async () => {
     const { securityBin, logPath } = makeSecurityBin();
     const prevBin = process.env.WALLETERM_SECURITY_BIN;

@@ -225,6 +225,7 @@ describe("executeX402Request", () => {
 
     expect(result.paid).toBe(true);
     expect(result.settlement).toBeUndefined();
+    expect(result.settlementError).toBe("No PAYMENT-RESPONSE header");
   });
 
   it("handles non-JSON 402 response body", async () => {

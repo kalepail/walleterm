@@ -232,6 +232,40 @@ describe("op-setup unit", () => {
     ).rejects.toThrow(/failed:/i);
   });
 
+  it("redacts [password]= values in error messages", async () => {
+    const root = mkdtempSync(join(tmpdir(), "walleterm-op-redact-"));
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const opBin = join(binDir, "op");
+
+    writeFileSync(
+      opBin,
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '--version') { process.stdout.write('2.32.1'); process.exit(0); }
+if (args[0] === 'whoami') { process.stdout.write('test@test.com'); process.exit(0); }
+if (args[0] === 'vault' && args[1] === 'get') { process.stdout.write('{}'); process.exit(0); }
+if (args[0] === 'item' && args[1] === 'get') { process.stderr.write('not found'); process.exit(1); }
+if (args[0] === 'item' && args[1] === 'create') { process.stderr.write('create failed'); process.exit(1); }
+process.exit(1);
+`,
+      "utf8",
+    );
+    chmodSync(opBin, 0o755);
+
+    await expect(
+      setupOnePasswordForWallet({
+        opBin,
+        vault: "Private",
+        item: "walleterm-testnet",
+        network: "testnet",
+        channelsApiKey: "manual-key",
+        overwriteExisting: true,
+        createVault: true,
+      }),
+    ).rejects.toThrow("[password]=[REDACTED]");
+  });
+
   it("uses WALLETERM_OP_BIN when opBin option is omitted", async () => {
     const opBin = makeOpBin("ok");
     const prev = process.env.WALLETERM_OP_BIN;

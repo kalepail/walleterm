@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   findAccountByContractId,
   loadConfig,
@@ -228,6 +228,73 @@ enabled = true
       secret_ref: "",
       enabled: true,
     });
+  });
+
+  it("rejects invalid onchain_signer_mode", () => {
+    const cfg = BASE_CONFIG.replace(
+      'onchain_signer_mode = "subset"',
+      'onchain_signer_mode = "all"',
+    );
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(/app\.onchain_signer_mode must be one of/i);
+  });
+
+  it("rejects invalid default_submit_mode", () => {
+    const cfg = `[app]
+default_network = "testnet"
+default_submit_mode = "broadcast"
+
+[networks.testnet]
+rpc_url = "https://example.test/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+
+[smart_accounts.a]
+network = "testnet"
+contract_id = "CTESTACCOUNTA"
+`;
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(/app\.default_submit_mode must be one of/i);
+  });
+
+  it("rejects NaN default_ttl_seconds", () => {
+    const cfg = BASE_CONFIG.replace("default_ttl_seconds = 30", 'default_ttl_seconds = "abc"');
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(
+      /app\.default_ttl_seconds must be a valid number/i,
+    );
+  });
+
+  it("warns on non-HTTPS URLs (not localhost)", () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const cfg = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "http://remote-server.example.com/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+
+[smart_accounts.a]
+network = "testnet"
+contract_id = "CTESTACCOUNTA"
+`;
+    loadConfig(writeConfig(cfg));
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("non-HTTPS URL"));
+    stderrSpy.mockRestore();
+  });
+
+  it("does not warn on localhost HTTP URLs", () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const cfg = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "http://localhost:8000/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+
+[smart_accounts.a]
+network = "testnet"
+contract_id = "CTESTACCOUNTA"
+`;
+    loadConfig(writeConfig(cfg));
+    expect(stderrSpy).not.toHaveBeenCalledWith(expect.stringContaining("non-HTTPS URL"));
+    stderrSpy.mockRestore();
   });
 
   it("loads x402 config section when present", () => {
