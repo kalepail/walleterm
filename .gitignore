@@ -9,3 +9,5 @@ coverage-c8/
 
 *.log
 .DS_Store
+x402-art/
+walleterm.toml

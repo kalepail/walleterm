@@ -19,6 +19,7 @@ export interface NetworkConfig {
   channels_base_url?: string;
   channels_api_key_ref?: string;
   deployer_secret_ref?: string;
+  x402_facilitator_url?: string;
 }
 
 export interface ExternalSignerConfig {
@@ -44,10 +45,15 @@ export interface SmartAccountConfig {
   delegated_signers?: DelegatedSignerConfig[];
 }
 
+export interface X402Config {
+  default_payer_secret_ref?: string;
+}
+
 export interface WalletermConfig {
   app: AppSection;
   networks: Record<string, NetworkConfig>;
   smart_accounts: Record<string, SmartAccountConfig>;
+  x402?: X402Config;
 }
 
 function assertObject(value: unknown, context: string): Record<string, unknown> {
@@ -108,6 +114,7 @@ export function loadConfig(path: string): WalletermConfig {
       channels_base_url: row.channels_base_url ? String(row.channels_base_url) : undefined,
       channels_api_key_ref: row.channels_api_key_ref ? String(row.channels_api_key_ref) : undefined,
       deployer_secret_ref: row.deployer_secret_ref ? String(row.deployer_secret_ref) : undefined,
+      x402_facilitator_url: row.x402_facilitator_url ? String(row.x402_facilitator_url) : undefined,
     };
   }
 
@@ -120,6 +127,16 @@ export function loadConfig(path: string): WalletermConfig {
       expected_wasm_hash: row.expected_wasm_hash ? String(row.expected_wasm_hash) : undefined,
       external_signers: normalizeExternalSigners(row.external_signers),
       delegated_signers: normalizeDelegatedSigners(row.delegated_signers),
+    };
+  }
+
+  let x402: X402Config | undefined;
+  if (parsed.x402) {
+    const x402Obj = assertObject(parsed.x402, "x402");
+    x402 = {
+      default_payer_secret_ref: x402Obj.default_payer_secret_ref
+        ? String(x402Obj.default_payer_secret_ref)
+        : undefined,
     };
   }
 
@@ -136,6 +153,7 @@ export function loadConfig(path: string): WalletermConfig {
     },
     networks,
     smart_accounts: smartAccounts,
+    x402,
   };
 
   validateConfig(config);

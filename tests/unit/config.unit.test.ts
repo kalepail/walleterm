@@ -229,4 +229,57 @@ enabled = true
       enabled: true,
     });
   });
+
+  it("loads x402 config section when present", () => {
+    const cfg = `${BASE_CONFIG}
+[x402]
+default_payer_secret_ref = "op://Private/testnet/payer_seed"
+`;
+    const config = loadConfig(writeConfig(cfg));
+    expect(config.x402?.default_payer_secret_ref).toBe("op://Private/testnet/payer_seed");
+  });
+
+  it("loads config without x402 section", () => {
+    const config = loadConfig(writeConfig(BASE_CONFIG));
+    expect(config.x402).toBeUndefined();
+  });
+
+  it("loads x402 section with no default_payer_secret_ref", () => {
+    const cfg = `${BASE_CONFIG}
+[x402]
+`;
+    const config = loadConfig(writeConfig(cfg));
+    expect(config.x402).toBeDefined();
+    expect(config.x402?.default_payer_secret_ref).toBeUndefined();
+  });
+
+  it("throws when x402 section is not a table", () => {
+    const cfg = `x402 = "not-a-table"
+
+[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "https://example.test/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+
+[smart_accounts]
+`;
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(/must be a table\/object/i);
+  });
+
+  it("loads x402_facilitator_url in network config", () => {
+    const cfg = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "https://example.test/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+x402_facilitator_url = "https://facilitator.example.com"
+
+[smart_accounts]
+`;
+    const config = loadConfig(writeConfig(cfg));
+    expect(config.networks.testnet?.x402_facilitator_url).toBe("https://facilitator.example.com");
+  });
 });

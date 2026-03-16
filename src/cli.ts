@@ -13,6 +13,12 @@ import {
   writeOutput,
 } from "./core.js";
 import { loadConfig, resolveNetwork } from "./config.js";
+import {
+  createWalletermSigner,
+  createX402HttpHandler,
+  executeX402Request,
+  passphraseToX402Network,
+} from "./x402.js";
 import { defaultServiceForNetwork, setupMacOSKeychainForWallet } from "./keychain-setup.js";
 import { SecretResolver } from "./secrets.js";
 import { defaultItemForNetwork, setupOnePasswordForWallet } from "./op-setup.js";
@@ -91,6 +97,17 @@ interface SubmitOpts extends InputOpts {
   channelsApiKey?: string;
   channelsApiKeyRef?: string;
   pluginId?: string;
+}
+
+interface PayOpts {
+  config: string;
+  network?: string;
+  secretRef?: string;
+  method: string;
+  header: string[];
+  data?: string;
+  output: string;
+  dryRun: boolean;
 }
 
 interface SetupOpOpts {
@@ -345,6 +362,8 @@ program
       "  walleterm wallet lookup --secret-ref keychain://walleterm-testnet/delegated_seed",
       "  walleterm wallet create --wasm-hash <hash> --delegated-address G... --out ./deploy.tx.xdr",
       "  walleterm wallet signer add --account treasury --secret-ref <ref> --out ./add.bundle.json",
+      "  walleterm pay https://api.example.com/resource --secret-ref op://Private/testnet/seed",
+      "  walleterm pay https://api.example.com/resource --dry-run --output json",
     ].join("\n"),
   )
   .showHelpAfterError();
@@ -484,6 +503,78 @@ program
       pluginId: opts.pluginId,
     } satisfies SubmitNetworkOverrides);
     process.stdout.write(`${JSON.stringify(result)}\n`);
+  });
+
+program
+  .command("pay")
+  .description("make an HTTP request to an x402-protected endpoint")
+  .argument("<url>", "resource URL")
+  .option("--method <method>", "HTTP method", "GET")
+  .option("--header <header>", "HTTP header (repeatable, Name: Value)", collectValues, [])
+  .option("--data <body>", "request body")
+  .option("--network <name>", "network name")
+  .option("--secret-ref <ref>", "keypair secret ref to pay from")
+  .option("--output <mode>", "body | json", "body")
+  .option("--dry-run", "show 402 details without paying", false)
+  .option("--config <path>", "config TOML path", "walleterm.toml")
+  .action(async (url: string, opts: PayOpts) => {
+    const config = loadConfig(opts.config);
+    const { config: network } = resolveNetwork(config, opts.network);
+
+    const secretRef = opts.secretRef ?? config.x402?.default_payer_secret_ref;
+    if (!secretRef) {
+      throw new Error(
+        "No payer specified. Pass --secret-ref or set x402.default_payer_secret_ref in config.",
+      );
+    }
+
+    const resolver = new SecretResolver();
+    const secret = await resolver.resolve(secretRef);
+    let keypair: Keypair;
+    try {
+      keypair = Keypair.fromSecret(secret);
+    } catch {
+      throw new Error("secret-ref must resolve to a valid Stellar secret seed (S...)");
+    }
+
+    const x402Network = passphraseToX402Network(network.network_passphrase);
+    const signer = createWalletermSigner(keypair, x402Network);
+    const handler = createX402HttpHandler(signer, x402Network, network.rpc_url);
+
+    const headers: Record<string, string> = {};
+    for (const h of opts.header) {
+      const idx = h.indexOf(":");
+      if (idx < 0) {
+        throw new Error(`Invalid header format: ${h}. Expected "Name: Value".`);
+      }
+      headers[h.slice(0, idx).trim()] = h.slice(idx + 1).trim();
+    }
+
+    const result = await executeX402Request(handler, {
+      url,
+      method: opts.method,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+      body: opts.data,
+      x402Network,
+      dryRun: opts.dryRun,
+      fetchFn: fetch,
+    });
+
+    if (opts.output === "json") {
+      process.stdout.write(
+        `${JSON.stringify({
+          paid: result.paid,
+          status: result.status,
+          payer: keypair.publicKey(),
+          payment_required: result.paymentRequired,
+          payment_payload: result.paymentPayload,
+          settlement: result.settlement,
+          body: Buffer.from(result.body).toString("base64"),
+        })}\n`,
+      );
+    } else {
+      process.stdout.write(Buffer.from(result.body));
+    }
   });
 
 const setup = program.command("setup").description("environment and secret setup");

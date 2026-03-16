@@ -52,6 +52,9 @@ channels_api_key_ref = "op://Private/walleterm-testnet/channels_api_key"
 # deployer_secret_ref = "op://Private/walleterm-testnet/deployer_seed"
 # deployer_secret_ref = "keychain://walleterm-testnet/deployer_seed"
 
+# Optional: override x402 facilitator URL for this network.
+# x402_facilitator_url = "https://x402-facilitator.example.com"
+
 [networks.mainnet]
 # Required
 rpc_url = "https://rpc.lightsail.network/"
@@ -64,6 +67,15 @@ channels_api_key_ref = "op://Private/walleterm-mainnet/channels_api_key"
 
 # Optional: only set if intentionally not using deterministic deployer.
 # deployer_secret_ref = "op://Private/walleterm-mainnet/deployer_seed"
+
+# -------------------------------------------------------------
+# x402 payment protocol (optional)
+# -------------------------------------------------------------
+
+# [x402]
+# Optional: default payer keypair secret ref for `walleterm pay` commands.
+# default_payer_secret_ref = "op://Private/walleterm-testnet/payer_seed"
+# default_payer_secret_ref = "keychain://walleterm-testnet/payer_seed"
 
 # -------------------------------------------------------------
 # Smart account aliases
