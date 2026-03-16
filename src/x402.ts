@@ -65,6 +65,7 @@ export interface X402Result {
   paymentRequired?: PaymentRequired;
   paymentPayload?: PaymentPayload;
   settlement?: SettleResponse;
+  settlementError?: string;
 }
 
 export async function executeX402Request(
@@ -122,6 +123,11 @@ export async function executeX402Request(
     };
   }
 
+  const accepted = stellarAccepts[0]!;
+  process.stderr.write(
+    `x402: paying ${accepted.amount} via ${accepted.scheme} on ${accepted.network} to ${accepted.payTo}\n`,
+  );
+
   const paymentPayload = await handler.createPaymentPayload(paymentRequired);
   const paymentHeaders = handler.encodePaymentSignatureHeader(paymentPayload);
   const retryHeaders = { ...opts.headers, ...paymentHeaders };
@@ -133,12 +139,13 @@ export async function executeX402Request(
   });
 
   let settlement: SettleResponse | undefined;
+  let settlementError: string | undefined;
   try {
     settlement = handler.getPaymentSettleResponse((name: string) =>
       retryResponse.headers.get(name),
     );
-  } catch {
-    settlement = undefined;
+  } catch (error) {
+    settlementError = error instanceof Error ? error.message : String(error);
   }
 
   return {
@@ -149,5 +156,6 @@ export async function executeX402Request(
     paymentRequired,
     paymentPayload,
     settlement,
+    settlementError,
   };
 }

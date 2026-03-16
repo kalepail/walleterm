@@ -160,6 +160,25 @@ export function loadConfig(path: string): WalletermConfig {
   return config;
 }
 
+const VALID_SIGNER_MODES = ["subset", "exact"];
+const VALID_SUBMIT_MODES = ["sign-only", "channels"];
+
+function isInsecureUrl(url: string): boolean {
+  if (!url.startsWith("http://")) return false;
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname !== "localhost" && hostname !== "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
+function warnInsecureUrl(field: string, url: string): void {
+  if (isInsecureUrl(url)) {
+    process.stderr.write(`Warning: ${field} uses non-HTTPS URL '${url}'\n`);
+  }
+}
+
 function validateConfig(config: WalletermConfig): void {
   if (!config.app.default_network) {
     throw new Error("app.default_network is required");
@@ -169,10 +188,40 @@ function validateConfig(config: WalletermConfig): void {
     throw new Error(`default network '${config.app.default_network}' is not defined`);
   }
 
+  if (
+    config.app.onchain_signer_mode &&
+    !VALID_SIGNER_MODES.includes(config.app.onchain_signer_mode)
+  ) {
+    throw new Error(`app.onchain_signer_mode must be one of: ${VALID_SIGNER_MODES.join(", ")}`);
+  }
+
+  if (
+    config.app.default_submit_mode &&
+    !VALID_SUBMIT_MODES.includes(config.app.default_submit_mode)
+  ) {
+    throw new Error(`app.default_submit_mode must be one of: ${VALID_SUBMIT_MODES.join(", ")}`);
+  }
+
+  if (config.app.default_ttl_seconds !== undefined && isNaN(config.app.default_ttl_seconds)) {
+    throw new Error("app.default_ttl_seconds must be a valid number");
+  }
+
+  if (
+    config.app.assumed_ledger_time_seconds !== undefined &&
+    isNaN(config.app.assumed_ledger_time_seconds)
+  ) {
+    throw new Error("app.assumed_ledger_time_seconds must be a valid number");
+  }
+
   for (const [name, network] of Object.entries(config.networks)) {
     if (!network.rpc_url) throw new Error(`networks.${name}.rpc_url is required`);
     if (!network.network_passphrase) {
       throw new Error(`networks.${name}.network_passphrase is required`);
+    }
+    warnInsecureUrl(`networks.${name}.rpc_url`, network.rpc_url);
+    if (network.indexer_url) warnInsecureUrl(`networks.${name}.indexer_url`, network.indexer_url);
+    if (network.channels_base_url) {
+      warnInsecureUrl(`networks.${name}.channels_base_url`, network.channels_base_url);
     }
   }
 
