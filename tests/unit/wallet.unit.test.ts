@@ -10,6 +10,7 @@ import {
   rpc,
   xdr,
 } from "@stellar/stellar-sdk";
+import { KeypairSigner } from "../../src/signer.js";
 import type { NetworkConfig } from "../../src/config.js";
 import {
   createWalletDeployTx,
@@ -77,7 +78,7 @@ describe("wallet unit", () => {
     await expect(
       createWalletDeployTx({
         network: TESTNET_NETWORK,
-        deployer: Keypair.random(),
+        deployer: new KeypairSigner(Keypair.random()),
         wasmHashHex: "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e",
         signers: [],
         sequenceOverride: "1",
@@ -88,12 +89,13 @@ describe("wallet unit", () => {
 
   it("validates wasm hash, salt, and sequence inputs", async () => {
     const deployer = Keypair.random();
+    const deployerSigner = new KeypairSigner(deployer);
     const signers: xdr.ScVal[] = [makeDelegatedSignerScVal(Keypair.random().publicKey())];
 
     await expect(
       createWalletDeployTx({
         network: TESTNET_NETWORK,
-        deployer,
+        deployer: deployerSigner,
         wasmHashHex: "abcd",
         signers,
         sequenceOverride: "1",
@@ -104,7 +106,7 @@ describe("wallet unit", () => {
     await expect(
       createWalletDeployTx({
         network: TESTNET_NETWORK,
-        deployer,
+        deployer: deployerSigner,
         wasmHashHex: "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e",
         signers,
         saltHex: "abcd",
@@ -116,7 +118,7 @@ describe("wallet unit", () => {
     await expect(
       createWalletDeployTx({
         network: TESTNET_NETWORK,
-        deployer,
+        deployer: deployerSigner,
         wasmHashHex: "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e",
         signers,
         sequenceOverride: "not-an-int",
@@ -134,7 +136,7 @@ describe("wallet unit", () => {
 
     const out = await createWalletDeployTx({
       network: TESTNET_NETWORK,
-      deployer,
+      deployer: new KeypairSigner(deployer),
       wasmHashHex: "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e",
       signers,
       skipPrepare: true,
@@ -153,7 +155,7 @@ describe("wallet unit", () => {
 
     const out = await createWalletDeployTx({
       network: TESTNET_NETWORK,
-      deployer,
+      deployer: new KeypairSigner(deployer),
       wasmHashHex: "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e",
       signers,
       sequenceOverride: "1",
@@ -178,7 +180,7 @@ describe("wallet unit", () => {
 
     const out = await createWalletDeployTx({
       network: TESTNET_NETWORK,
-      deployer,
+      deployer: new KeypairSigner(deployer),
       wasmHashHex: "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e",
       signers,
       sequenceOverride: "1",
@@ -206,7 +208,7 @@ describe("wallet unit", () => {
 
     const out = await createWalletDeployTx({
       network: TESTNET_NETWORK,
-      deployer,
+      deployer: new KeypairSigner(deployer),
       wasmHashHex: "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e",
       signers,
       sequenceOverride: "1",
@@ -234,7 +236,7 @@ describe("wallet unit", () => {
 
     const out = await createWalletDeployTx({
       network: TESTNET_NETWORK,
-      deployer,
+      deployer: new KeypairSigner(deployer),
       wasmHashHex: "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e",
       signers,
       sequenceOverride: "1",
@@ -263,7 +265,7 @@ describe("wallet unit", () => {
 
     const out = await createWalletDeployTx({
       network: TESTNET_NETWORK,
-      deployer,
+      deployer: new KeypairSigner(deployer),
       wasmHashHex: "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e",
       signers,
       sequenceOverride: "1",

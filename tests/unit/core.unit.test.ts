@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../helpers/temp-dir.js";
+import { makeFakeSshAgentFixture } from "../helpers/fake-ssh-agent.js";
 import {
   Account,
   Address,
@@ -18,6 +19,8 @@ import type {
   SmartAccountConfig,
   WalletermConfig,
 } from "../../src/config.js";
+import { KeypairSigner } from "../../src/signer.js";
+import type { Signer } from "../../src/signer.js";
 import {
   canSignInput,
   computeExpirationLedger,
@@ -112,16 +115,16 @@ function makeRuntimeSigners(opts?: {
 
   const externalByComposite = new Map<string, RuntimeExternalSigner>();
   const delegatedByAddress = new Map<string, RuntimeDelegatedSigner>();
-  const byAddress = new Map<string, Keypair>();
+  const byAddress = new Map<string, Signer>();
 
   for (const row of external) {
     externalByComposite.set(`${row.verifierContractId}|${row.publicKeyHex.toLowerCase()}`, row);
-    byAddress.set(row.keypair.publicKey(), row.keypair);
+    byAddress.set(row.signer.publicKey(), row.signer);
   }
 
   for (const row of delegated) {
     delegatedByAddress.set(row.address, row);
-    byAddress.set(row.address, row.keypair);
+    byAddress.set(row.address, row.signer);
   }
 
   return {
@@ -130,7 +133,7 @@ function makeRuntimeSigners(opts?: {
     externalByComposite,
     delegatedByAddress,
     byAddress,
-    allKeypairs: [...byAddress.values()],
+    allSigners: [...byAddress.values()],
   };
 }
 
@@ -290,7 +293,7 @@ describe("core unit", () => {
 
   it("loadRuntimeSigners handles null account and disabled signers", async () => {
     const empty = await loadRuntimeSigners(null, makeResolver({}));
-    expect(empty.allKeypairs).toHaveLength(0);
+    expect(empty.allSigners).toHaveLength(0);
 
     const ext = Keypair.random();
     const del = Keypair.random();
@@ -491,7 +494,7 @@ describe("core unit", () => {
     expect(out.authEntries).toBe(0);
   });
 
-  it("signInput signs generic address entries and skips unsupported paths", () => {
+  it("signInput signs generic address entries and skips unsupported paths", async () => {
     const delegated = Keypair.random();
     const runtime = makeRuntimeSigners({
       delegated: [
@@ -499,32 +502,32 @@ describe("core unit", () => {
           kind: "delegated",
           name: "d1",
           address: delegated.publicKey(),
-          keypair: delegated,
+          signer: new KeypairSigner(delegated),
         },
       ],
     });
 
     const ctx = makeContext({ runtimeSigners: runtime, accountRef: null });
 
-    const signed = signInput(
+    const signed = await signInput(
       { kind: "auth", auth: [makeAddressEntry(delegated.publicKey())] },
       ctx,
     );
     expect(signed.report.summary.signed).toBe(1);
 
-    const skippedNoKey = signInput(
+    const skippedNoKey = await signInput(
       { kind: "auth", auth: [makeAddressEntry(Keypair.random().publicKey())] },
       makeContext({ runtimeSigners: makeRuntimeSigners(), accountRef: null }),
     );
     expect(skippedNoKey.report.summary.skipped).toBe(1);
 
-    const skippedSourceCred = signInput(
+    const skippedSourceCred = await signInput(
       { kind: "auth", auth: [makeSourceAccountCredEntry()] },
       makeContext({ runtimeSigners: makeRuntimeSigners(), accountRef: null }),
     );
     expect(skippedSourceCred.report.details[0]?.reason).toMatch(/unsupported credential type/i);
 
-    const unknownContract = signInput(
+    const unknownContract = await signInput(
       {
         kind: "auth",
         auth: [makeAddressEntry(StrKey.encodeContract(Buffer.alloc(32, 77)))],
@@ -538,7 +541,7 @@ describe("core unit", () => {
     const spy = vi
       .spyOn(Address, "fromScAddress")
       .mockReturnValue({ toString: () => "X-NON-STELLAR" } as unknown as Address);
-    const unsupported = signInput(
+    const unsupported = await signInput(
       { kind: "auth", auth: [makeAddressEntry(delegated.publicKey())] },
       makeContext({ runtimeSigners: runtime, accountRef: null }),
     );
@@ -546,7 +549,7 @@ describe("core unit", () => {
     spy.mockRestore();
   });
 
-  it("signInput signs smart-account entries and expands delegated auth entries", () => {
+  it("signInput signs smart-account entries and expands delegated auth entries", async () => {
     const external = Keypair.random();
     const delegated = Keypair.random();
     const verifier = StrKey.encodeContract(Buffer.alloc(32, 12));
@@ -558,7 +561,7 @@ describe("core unit", () => {
           name: "ext",
           verifierContractId: verifier,
           publicKeyHex: Buffer.from(external.rawPublicKey()).toString("hex"),
-          keypair: external,
+          signer: new KeypairSigner(external),
         },
       ],
       delegated: [
@@ -566,13 +569,13 @@ describe("core unit", () => {
           kind: "delegated",
           name: "del",
           address: delegated.publicKey(),
-          keypair: delegated,
+          signer: new KeypairSigner(delegated),
         },
       ],
     });
 
     const entry = makeAddressEntry(CONTRACT, xdr.ScVal.scvVec([xdr.ScVal.scvMap([])]));
-    const result = signInput(
+    const result = await signInput(
       { kind: "auth", auth: [entry] },
       makeContext({ runtimeSigners: runtime }),
     );
@@ -582,7 +585,7 @@ describe("core unit", () => {
     expect(out.auth.length).toBe(2);
   });
 
-  it("signInput skips unknown signer-map keys and missing local signer matches", () => {
+  it("signInput skips unknown signer-map keys and missing local signer matches", async () => {
     const verifier = StrKey.encodeContract(Buffer.alloc(32, 13));
     const unknownKey = xdr.ScVal.scvVec([
       xdr.ScVal.scvSymbol("UnknownType"),
@@ -605,7 +608,7 @@ describe("core unit", () => {
       ]),
     );
 
-    const out = signInput(
+    const out = await signInput(
       { kind: "auth", auth: [entry] },
       makeContext({ runtimeSigners: makeRuntimeSigners() }),
     );
@@ -613,25 +616,25 @@ describe("core unit", () => {
     expect(out.report.summary.skipped).toBeGreaterThanOrEqual(3);
   });
 
-  it("signInput throws on malformed smart-account signature map", () => {
+  it("signInput throws on malformed smart-account signature map", async () => {
     const malformed = makeAddressEntry(CONTRACT, xdr.ScVal.scvMap([]));
-    expect(() =>
+    await expect(
       signInput(
         { kind: "auth", auth: [malformed] },
         makeContext({ runtimeSigners: makeRuntimeSigners() }),
       ),
-    ).toThrow(/Unsupported signature ScVal shape/i);
+    ).rejects.toThrow(/Unsupported signature ScVal shape/i);
 
     const malformedVec = makeAddressEntry(
       CONTRACT,
       xdr.ScVal.scvVec([xdr.ScVal.scvBytes(Buffer.alloc(1))]),
     );
-    expect(() =>
+    await expect(
       signInput(
         { kind: "auth", auth: [malformedVec] },
         makeContext({ runtimeSigners: makeRuntimeSigners() }),
       ),
-    ).toThrow(/Unsupported signature ScVal shape/i);
+    ).rejects.toThrow(/Unsupported signature ScVal shape/i);
   });
 
   it("canSignInput covers G/C auth resolution, malformed map, and unsupported address type", () => {
@@ -645,7 +648,7 @@ describe("core unit", () => {
           kind: "delegated",
           name: "del",
           address: delegated.publicKey(),
-          keypair: delegated,
+          signer: new KeypairSigner(delegated),
         },
       ],
       external: [
@@ -654,7 +657,7 @@ describe("core unit", () => {
           name: "ext",
           verifierContractId: verifier,
           publicKeyHex: Buffer.from(external.rawPublicKey()).toString("hex"),
-          keypair: external,
+          signer: new KeypairSigner(external),
         },
       ],
     });
@@ -841,7 +844,7 @@ describe("core unit", () => {
     spy.mockRestore();
   });
 
-  it("canSignInput and signInput on tx include envelope signer matching and auth signability", () => {
+  it("canSignInput and signInput on tx include envelope signer matching and auth signability", async () => {
     const source = Keypair.random();
     const delegated = Keypair.random();
 
@@ -870,13 +873,13 @@ describe("core unit", () => {
           kind: "delegated",
           name: "del",
           address: delegated.publicKey(),
-          keypair: delegated,
+          signer: new KeypairSigner(delegated),
         },
         {
           kind: "delegated",
           name: "src",
           address: source.publicKey(),
-          keypair: source,
+          signer: new KeypairSigner(source),
         },
       ],
     });
@@ -890,19 +893,19 @@ describe("core unit", () => {
     expect(can.signableEnvelopeSigners).toContain(source.publicKey());
     expect(can.signableAuthEntries).toBe(1);
 
-    const signed = signInput({ kind: "tx", envelope: txEnvelope }, ctx);
+    const signed = await signInput({ kind: "tx", envelope: txEnvelope }, ctx);
     expect(signed.report.summary.signed).toBeGreaterThanOrEqual(2);
   });
 
-  it("signInput on tx skips non-Soroban operations and still signs envelope signatures", () => {
+  it("signInput on tx skips non-Soroban operations and still signs envelope signatures", async () => {
     const source = Keypair.random();
     const txEnvelope = makeTxEnvelope([Operation.bumpSequence({ bumpTo: "2" })], source);
 
     const runtime = makeRuntimeSigners({
-      delegated: [{ kind: "delegated", name: "src", address: source.publicKey(), keypair: source }],
+      delegated: [{ kind: "delegated", name: "src", address: source.publicKey(), signer: new KeypairSigner(source) }],
     });
 
-    const signed = signInput(
+    const signed = await signInput(
       { kind: "tx", envelope: txEnvelope },
       makeContext({ runtimeSigners: runtime, accountRef: null }),
     );
@@ -915,7 +918,7 @@ describe("core unit", () => {
     const source = Keypair.random();
     const txEnvelope = makeTxEnvelope([Operation.bumpSequence({ bumpTo: "2" })], source);
     const runtime = makeRuntimeSigners({
-      delegated: [{ kind: "delegated", name: "src", address: source.publicKey(), keypair: source }],
+      delegated: [{ kind: "delegated", name: "src", address: source.publicKey(), signer: new KeypairSigner(source) }],
     });
 
     const inspected = inspectInput({ kind: "tx", envelope: txEnvelope });
@@ -955,13 +958,13 @@ describe("core unit", () => {
           kind: "delegated",
           name: "inner",
           address: innerSource.publicKey(),
-          keypair: innerSource,
+          signer: new KeypairSigner(innerSource),
         },
         {
           kind: "delegated",
           name: "fee",
           address: feeSource.publicKey(),
-          keypair: feeSource,
+          signer: new KeypairSigner(feeSource),
         },
       ],
     });
@@ -994,8 +997,8 @@ describe("core unit", () => {
 
     const runtime = makeRuntimeSigners({
       delegated: [
-        { kind: "delegated", name: "src", address: source.publicKey(), keypair: source },
-        { kind: "delegated", name: "inner", address: inner.publicKey(), keypair: inner },
+        { kind: "delegated", name: "src", address: source.publicKey(), signer: new KeypairSigner(source) },
+        { kind: "delegated", name: "inner", address: inner.publicKey(), signer: new KeypairSigner(inner) },
       ],
     });
 
@@ -1048,7 +1051,7 @@ describe("core unit", () => {
           name: "local",
           verifierContractId: verifier,
           publicKeyHex: Buffer.from(localExternal.rawPublicKey()).toString("hex"),
-          keypair: localExternal,
+          signer: new KeypairSigner(localExternal),
         },
       ],
     });
@@ -1144,7 +1147,7 @@ describe("core unit", () => {
     expect(out).toBeNull();
   });
 
-  it("signInput bundle omits func key when it is not provided", () => {
+  it("signInput bundle omits func key when it is not provided", async () => {
     const delegated = Keypair.random();
     const runtime = makeRuntimeSigners({
       delegated: [
@@ -1152,12 +1155,12 @@ describe("core unit", () => {
           kind: "delegated",
           name: "d1",
           address: delegated.publicKey(),
-          keypair: delegated,
+          signer: new KeypairSigner(delegated),
         },
       ],
     });
 
-    const out = signInput(
+    const out = await signInput(
       { kind: "bundle", auth: [makeAddressEntry(delegated.publicKey())] },
       makeContext({ runtimeSigners: runtime, accountRef: null }),
     );
@@ -1195,5 +1198,35 @@ describe("core unit", () => {
     const p2 = tempFile("");
     writeOutput(p2, "abc\n");
     expect(readFileSync(p2, "utf8")).toBe("abc\n");
+  });
+
+  it("loadRuntimeSigners resolves ssh-agent:// refs via SSH agent protocol", async () => {
+    const fx = await makeFakeSshAgentFixture();
+    try {
+      const ref = `ssh-agent://custom/${fx.stellarAddress}?socket=${encodeURIComponent(fx.socketPath)}`;
+      const account: SmartAccountConfig = {
+        network: "testnet",
+        contract_id: CONTRACT,
+        delegated_signers: [
+          {
+            name: "ssh-del",
+            address: fx.stellarAddress,
+            secret_ref: ref,
+            enabled: true,
+          },
+        ],
+      };
+
+      const runtime = await loadRuntimeSigners(
+        { alias: "treasury", account },
+        makeResolver({}),
+      );
+
+      expect(runtime.delegated).toHaveLength(1);
+      expect(runtime.delegated[0]!.address).toBe(fx.stellarAddress);
+      expect(runtime.allSigners).toHaveLength(1);
+    } finally {
+      await fx.cleanup();
+    }
   });
 });

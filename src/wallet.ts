@@ -13,6 +13,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { z } from "zod";
 import type { NetworkConfig, SignerMode, SmartAccountConfig } from "./config.js";
+import type { Signer } from "./signer.js";
 
 // ---------------------------------------------------------------------------
 // Zod schemas for indexer response validation
@@ -26,13 +27,13 @@ const StellarPublicKey = z.string().regex(/^G[A-Z0-9]{55}$/, "Invalid Stellar pu
 
 const IndexerContractSummarySchema = z.object({
   contract_id: StellarContractId,
-  context_rule_count: z.number(),
-  external_signer_count: z.number(),
-  delegated_signer_count: z.number(),
-  native_signer_count: z.number(),
-  first_seen_ledger: z.number(),
-  last_seen_ledger: z.number(),
-  context_rule_ids: z.array(z.number()),
+  context_rule_count: z.coerce.number(),
+  external_signer_count: z.coerce.number(),
+  delegated_signer_count: z.coerce.number(),
+  native_signer_count: z.coerce.number(),
+  first_seen_ledger: z.coerce.number(),
+  last_seen_ledger: z.coerce.number(),
+  context_rule_ids: z.array(z.coerce.number()),
 });
 
 const AddressLookupResponseSchema = z.object({
@@ -473,7 +474,7 @@ export function deriveContractIdFromSalt(
 
 export interface CreateWalletTxOptions {
   network: NetworkConfig;
-  deployer: Keypair;
+  deployer: Signer;
   wasmHashHex: string;
   signers: xdr.ScVal[];
   saltHex?: string;
@@ -575,7 +576,7 @@ export async function createWalletDeployTx(
     }
   }
 
-  tx.sign(options.deployer);
+  await options.deployer.signTransaction(tx);
 
   return {
     contractId: deriveContractIdFromSalt(

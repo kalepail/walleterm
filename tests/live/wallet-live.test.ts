@@ -294,7 +294,7 @@ strict_onchain = true
 onchain_signer_mode = "subset"
 default_ttl_seconds = 30
 assumed_ledger_time_seconds = 6
-default_submit_mode = "channels"
+default_submit_mode = "sign-only"
 
 [networks.testnet]
 rpc_url = "https://soroban-rpc.testnet.stellar.gateway.fm"

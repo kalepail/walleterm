@@ -28,6 +28,8 @@ import {
 import { defaultServiceForNetwork, setupMacOSKeychainForWallet } from "./keychain-setup.js";
 import { SecretResolver } from "./secrets.js";
 import { defaultItemForNetwork, setupOnePasswordForWallet } from "./op-setup.js";
+import { KeypairSigner } from "./signer.js";
+import { setupSshAgentForWallet } from "./ssh-agent-setup.js";
 import { submitTxXdrViaRpc, submitViaChannels, type SubmitNetworkOverrides } from "./submit.js";
 import {
   buildSignerMutationBundle,
@@ -342,7 +344,7 @@ async function runSignerMutation(
       expirationLedger,
     );
 
-    const { output, report } = signInput(parsed, {
+    const { output, report } = await signInput(parsed, {
       config,
       networkName,
       network,
@@ -588,7 +590,7 @@ program
         latestLedger,
       );
 
-      const { output, report } = signInput(parsed, {
+      const { output, report } = await signInput(parsed, {
         config,
         networkName,
         network,
@@ -862,6 +864,38 @@ setup
       process.stderr.write(
         `refs: ${result.refs.deployer_seed_ref ?? "(not stored)"}, ${result.refs.delegated_seed_ref}, ${result.refs.channels_api_key_ref}\n`,
       );
+      process.stderr.write("config snippet:\n");
+      process.stderr.write(`${result.config_snippet}\n`);
+    }
+
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  });
+
+interface SetupSshAgentOpts {
+  backend: string;
+  socket?: string;
+  json?: boolean;
+}
+
+setup
+  .command("ssh-agent")
+  .description("discover Ed25519 keys in an SSH agent and generate config refs")
+  .option("--backend <name>", "agent backend: system, 1password, or custom", "system")
+  .option("--socket <path>", "explicit agent socket path (required for custom backend)")
+  .option("--json", "print only json output", false)
+  .action(async (opts: SetupSshAgentOpts) => {
+    const result = await setupSshAgentForWallet({
+      backend: opts.backend,
+      socketPath: opts.socket,
+    });
+
+    if (!opts.json) {
+      process.stderr.write(`SSH agent discovery complete (${result.backend}).\n`);
+      process.stderr.write(`socket: ${result.socket_path}\n`);
+      process.stderr.write(`found ${result.keys.length} Ed25519 key(s):\n`);
+      for (const key of result.keys) {
+        process.stderr.write(`  ${key.stellar_address} (${key.comment})\n`);
+      }
       process.stderr.write("config snippet:\n");
       process.stderr.write(`${result.config_snippet}\n`);
     }
@@ -1162,7 +1196,7 @@ wallet
 
       const { contractId, txXdr, saltHex } = await createWalletDeployTx({
         network,
-        deployer,
+        deployer: new KeypairSigner(deployer),
         wasmHashHex: wasmHash,
         signers,
         saltHex: createSaltHex,
