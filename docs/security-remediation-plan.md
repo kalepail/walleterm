@@ -40,9 +40,9 @@ The codebase has a **strong security posture** for a CLI tool. No critical vulne
 
 ### L2: Output Files Created With Default Permissions — FIXED
 
-- **File:** `src/core.ts`
+- **Files:** `src/core.ts`, `src/cli.ts`
 - **Description:** `writeOutput` used `writeFileSync` without specifying a `mode`, making signed transaction files potentially world-readable.
-- **Fix:** Changed to `writeFileSync(path, content, { encoding: "utf8", mode: 0o600 })`.
+- **Fix:** Changed `writeOutput()` to use `writeFileSync(path, content, { encoding: "utf8", mode: 0o600 })`. The `pay --out` path in `src/cli.ts` now also writes response bodies with `mode: 0o600`.
 
 ### L3: No TLS Enforcement for RPC/Indexer URLs — FIXED
 
@@ -63,12 +63,54 @@ The codebase has a **strong security posture** for a CLI tool. No critical vulne
 - **Fix:** Added `settlementError?: string` to `X402Result` interface; error message captured in catch block.
 - **Tests:** Updated "handles missing settlement header" test to assert `settlementError` field.
 
-### M1: x402 Payment Amount Not Displayed — PARTIAL FIX
+### M1: x402 Payment Amount Not Displayed — FIXED
 
-- **File:** `src/x402.ts`
+- **Files:** `src/x402.ts`, `src/config.ts`, `src/cli.ts`
 - **Description:** Payment amount was not shown before signing. Full audit recommendation included a configurable `max_payment_amount` with abort-if-exceeded.
-- **Fix (implemented):** Added `process.stderr.write()` before `createPaymentPayload()` showing amount, scheme, network, and payTo address.
-- **Remaining:** Configurable `max_payment_amount` cap and `--yes` bypass not yet implemented. Tracked as future work.
+- **Fix:** Added `process.stderr.write()` before `createPaymentPayload()` showing amount, scheme, network, and payTo address. Added `max_payment_amount` field to `X402Config` with validation. Added `--yes` CLI flag to skip cap check. `executeX402Request` now aborts if amount exceeds configured cap (unless `--yes` is passed).
+
+### M2: Indexer Responses Validated With Zod — FIXED
+
+- **File:** `src/wallet.ts`
+- **Description:** `fetchJson<T>()` used unsafe `as T` cast without schema validation.
+- **Fix:** Added Zod schemas for all indexer response types (`AddressLookupResponseSchema`, `CredentialLookupResponseSchema`, `ContractSignersResponseSchema`). `fetchJson<T>()` now accepts an optional `schema?: z.ZodType<T>` parameter. All security-sensitive callers pass their Zod schema.
+- **Dependencies:** Added `zod` as a production dependency.
+
+### M3: Secrets Visible in Process Listings — DOCUMENTED
+
+- **Files:** `src/keychain-setup.ts`, `src/op-setup.ts`
+- **Description:** Secret seeds passed as CLI arguments are visible via `ps aux` during subprocess execution.
+- **Fix:** Added stderr warning during setup: "Secret values are briefly visible in process listings during storage. This is a platform limitation of the security/op CLI tools." This is a platform limitation — `security -w` requires the value as an argument.
+
+### M4: Secret Cache Clearing — FIXED
+
+- **Files:** `src/secrets.ts`, `src/cli.ts`
+- **Description:** `SecretResolver` stored secrets in memory with no clearing mechanism.
+- **Fix:** Added `clearCache()` method to `SecretResolver`. All CLI command handlers now call `resolver.clearCache()` after secret resolution completes.
+
+### M5: Environment Filtering for Child Processes — FIXED
+
+- **Files:** `src/secrets.ts`, `src/keychain-setup.ts`, `src/op-setup.ts`
+- **Description:** `execFile` calls passed `env: process.env`, exposing all environment variables to subprocesses.
+- **Fix:** Added `safeEnv()`/`filteredEnv()` helpers that filter to a safe allowlist: `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, plus `OP_*` (for 1Password) and `WALLETERM_*` (for testing/config) prefixed variables.
+
+### L5: `op://` Ref Format Validated — FIXED
+
+- **File:** `src/secrets.ts`
+- **Description:** Malformed `op://` refs produced confusing `op` CLI errors.
+- **Fix:** `OnePasswordSecretProvider.resolve()` now validates that the ref has exactly 3 non-empty path segments (`op://<vault>/<item>/<field>`) before invoking `op read`. Throws a descriptive error on malformed refs.
+
+### L7: Deterministic Deployer Keypair Documented — FIXED
+
+- **File:** `src/wallet.ts`
+- **Description:** `smartAccountKitDeployerKeypair()` derives a keypair from a hardcoded public constant but was underdocumented.
+- **Fix:** Added JSDoc comment explaining the keypair is intentionally deterministic, follows the OpenZeppelin Smart Account Kit convention, and should never hold meaningful balances.
+
+### L8: Crypto Dependencies Pinned — FIXED
+
+- **File:** `package.json`
+- **Description:** Production crypto/payment dependencies used caret (`^`) version ranges.
+- **Fix:** Pinned exact versions for `@stellar/stellar-sdk`, `@x402/core`, and `@x402/stellar`.
 
 ---
 
@@ -78,15 +120,7 @@ All IDs below match the original `docs/security-audit.md` finding identifiers.
 
 | ID | Title | Rationale |
 |----|-------|-----------|
-| M1 (partial) | x402 `max_payment_amount` cap | Display implemented; configurable cap + `--yes` bypass deferred to future PR |
-| M2 | Indexer responses trusted without schema validation | `fetchJson<T>()` uses unsafe `as T` cast. Low urgency: indexer URL is user-configured, and fabricated responses would only mislead lookup output, not compromise signing. Consider Zod validation in future. |
-| M3 | Secrets visible in process listings during setup | Platform limitation; `security -w` requires arg; investigate `op --stdin` later |
-| M4 | Secret cache never cleared | Low risk for short-lived CLI; add `clearCache()` later |
-| M5 | Full env inherited by child processes | Filtering risks breaking `op`/`security`; document trust model |
-| L5 | `op://` ref format not validated before execution | Malformed refs produce confusing `op` CLI errors but no security impact. Consider pre-validation for UX. |
-| L6 | Secret ref metadata exposed in error messages | Partially mitigated by `truncateErrorMessage()`; remaining exposure is vault/item paths (not secrets). |
-| L7 | Deterministic deployer keypair | Intentional design for shared Smart Account Kit convention; document it |
-| L8 (partial) | Caret version ranges on crypto deps | Mitigated by lockfile + `--frozen-lockfile` in CI. NaN guard added for numeric fields. |
+| L6 | Secret ref metadata exposed in error messages | Partially mitigated by `truncateErrorMessage()`; remaining exposure is vault/item paths (not secrets). Acceptable risk — paths are not secrets. |
 
 ---
 
@@ -126,14 +160,14 @@ All IDs below match the original `docs/security-audit.md` finding identifiers.
 
 ---
 
-## Test Coverage Gaps (Tracked, Not Addressed)
+## Test Coverage Gaps — MOSTLY ADDRESSED
 
 | ID | Area | Status |
 |----|------|--------|
-| T1 | `keychain-setup.ts` error/auto-gen paths (64% coverage) | Partially improved with redaction test |
-| T2 | `secrets.ts` non-darwin branches (90% coverage) | Not addressed |
-| T3 | `submit.ts` `readDirectOrSecretRef` unsupported-scheme branch | Not addressed |
-| T4 | Malformed-but-valid-base64 input to `parseInputFile` | Not addressed |
-| T5 | Temp files with seeds not cleaned up in tests | Not addressed |
-| T6 | `as never` casts in mocks mask type drift | Not addressed |
-| T7 | Config type coercion not tested | Not addressed |
+| T1 | `keychain-setup.ts` error/auto-gen paths | **Fixed** — Added 9 tests: `ensureMacOSAvailable` non-macOS path, `errorMessage` catch path, `networkDefaults` branches, `resolveChannelsApiKey` auto-generation |
+| T2 | `secrets.ts` non-darwin branches | **Fixed** — Added 6 tests: `canUseMacOSKeychain` false branch, custom keychain path, exec failure/empty value errors, bare-string-without-scheme, `clearCache()` verification |
+| T3 | `submit.ts` `readDirectOrSecretRef` unsupported-scheme branch | **Fixed** — Added 1 test: passes `env://something` to verify unsupported scheme error |
+| T4 | Malformed-but-valid-base64 input to `parseInputFile` | **Fixed** — Added 1 test: valid base64 of garbage data, verifies "neither base64 XDR nor JSON" error |
+| T5 | Temp files with seeds not cleaned up in tests | **Partially fixed** — Added `cleanup()` method to `FakeSecurityFixture`, set `mode: 0o600` on log file and store file writes. Some tests still create temp dirs/files without explicit cleanup hooks. |
+| T6 | `as never` casts in mocks mask type drift | **Partially fixed** — Replaced `as never` with `satisfies ChannelsTransactionResponse` on 3 mock return values in submit tests and properly typed `getLatestLedger` mock. Left complex XDR-related casts as-is |
+| T7 | Config type coercion not tested | **Fixed** — Added 1 test: numeric/boolean config values coerce via `String()` without crashing |

@@ -206,6 +206,7 @@ describe("walleterm pay e2e", () => {
       transaction: "txhash",
       network: "stellar:testnet",
     });
+    expect(parsed.settlement_error).toBeNull();
   });
 
   it("passes dry-run option to executeX402Request", async () => {
@@ -372,6 +373,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
       transaction: "txhash",
       network: "stellar:testnet",
     });
+    expect(parsed.settlement_error).toBeNull();
   });
 
   it("--out writes binary data without corruption", async () => {
@@ -422,6 +424,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(parsed.size).toBe(10);
     expect(parsed.content_type).toBe("image/png");
+    expect(parsed.settlement_error).toBeNull();
   });
 
   it("--out with no content-type header outputs null content_type", async () => {
@@ -464,6 +467,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(parsed.content_type).toBeNull();
     expect(parsed.payer).toBe(keypair.publicKey());
+    expect(parsed.settlement_error).toBeNull();
     expect(readFileSync(outPath, "utf8")).toBe("data");
   });
 
@@ -502,6 +506,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(parsed.settlement).toBeNull();
     expect(parsed.content_type).toBe("text/plain");
+    expect(parsed.settlement_error).toBeNull();
   });
 
   it("--out takes priority over --format json", async () => {
@@ -547,6 +552,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(parsed.file).toBe(outPath);
     expect(parsed.payer).toBe(keypair.publicKey());
+    expect(parsed.settlement_error).toBeNull();
     expect(parsed).not.toHaveProperty("response_headers");
     expect(parsed).not.toHaveProperty("payment_required");
     expect(readFileSync(outPath, "utf8")).toBe("file content");
@@ -591,5 +597,79 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(parsed.size).toBe(0);
     expect(parsed.file).toBe(outPath);
+    expect(parsed.settlement_error).toBeNull();
+  });
+
+  it("exposes settlement_error in JSON output when settlement parsing fails", async () => {
+    const { configPath, env } = makeFixture();
+    vi.mocked(executeX402Request).mockResolvedValueOnce({
+      paid: true,
+      status: 200,
+      body: new TextEncoder().encode("paid content"),
+      responseHeaders: {},
+      paymentRequired: {
+        x402Version: 2,
+        resource: { url: "https://example.com" },
+        accepts: [],
+      },
+      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      settlementError: "No PAYMENT-RESPONSE header",
+    });
+
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--format",
+        "json",
+      ],
+      env,
+    );
+
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.settlement).toBeUndefined();
+    expect(parsed.settlement_error).toBe("No PAYMENT-RESPONSE header");
+  });
+
+  it("exposes settlement_error in --out summary when settlement parsing fails", async () => {
+    const { configPath, env } = makeFixture();
+    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outPath = join(outDir, "response.bin");
+
+    vi.mocked(executeX402Request).mockResolvedValueOnce({
+      paid: true,
+      status: 200,
+      body: new TextEncoder().encode("paid content"),
+      responseHeaders: { "content-type": "text/plain" },
+      paymentRequired: {
+        x402Version: 2,
+        resource: { url: "https://example.com" },
+        accepts: [],
+      },
+      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      settlementError: "No PAYMENT-RESPONSE header",
+    });
+
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--out",
+        outPath,
+      ],
+      env,
+    );
+
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.settlement).toBeNull();
+    expect(parsed.settlement_error).toBe("No PAYMENT-RESPONSE header");
   });
 });

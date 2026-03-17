@@ -335,6 +335,36 @@ network_passphrase = "Test SDF Network ; September 2015"
     expect(() => loadConfig(writeConfig(cfg))).toThrow(/must be a table\/object/i);
   });
 
+  it("coerces unexpected types in config fields via String() without crashing", () => {
+    // When TOML parsing yields a number where a string is expected, loadConfig
+    // calls String() which coerces it. Verify this produces technically valid
+    // (but likely broken) configs rather than crashing.
+    //
+    // We cannot feed a raw number through TOML for rpc_url since TOML typing
+    // enforces string values for table fields. Instead we test through the
+    // normalizer functions by constructing TOML that exercises String() coercion
+    // on fields that go through String().
+
+    // rpc_url = 42 in TOML is an integer. This tests that the config loader
+    // coerces it to the string "42" rather than throwing.
+    const numericRpcUrl = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = 42
+network_passphrase = true
+
+[smart_accounts.a]
+network = "testnet"
+contract_id = "CTESTACCOUNTA"
+`;
+    const config = loadConfig(writeConfig(numericRpcUrl));
+    // String(42) -> "42"
+    expect(config.networks.testnet?.rpc_url).toBe("42");
+    // String(true) -> "true"
+    expect(config.networks.testnet?.network_passphrase).toBe("true");
+  });
+
   it("loads x402_facilitator_url in network config", () => {
     const cfg = `[app]
 default_network = "testnet"
@@ -348,5 +378,42 @@ x402_facilitator_url = "https://facilitator.example.com"
 `;
     const config = loadConfig(writeConfig(cfg));
     expect(config.networks.testnet?.x402_facilitator_url).toBe("https://facilitator.example.com");
+  });
+
+  it("rejects invalid expected_wasm_hash values", () => {
+    const cfg = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "https://example.test/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+
+[smart_accounts.a]
+network = "testnet"
+contract_id = "CTESTACCOUNTA"
+expected_wasm_hash = "abcd"
+`;
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(
+      /smart_accounts\.a\.expected_wasm_hash must be a 32-byte hex string/i,
+    );
+  });
+
+  it("warns on non-localhost x402_facilitator_url over HTTP", () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const cfg = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "https://example.test/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+x402_facilitator_url = "http://facilitator.example.com"
+
+[smart_accounts.a]
+network = "testnet"
+contract_id = "CTESTACCOUNTA"
+`;
+    loadConfig(writeConfig(cfg));
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("x402_facilitator_url"));
+    stderrSpy.mockRestore();
   });
 });

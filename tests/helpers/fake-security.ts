@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +8,8 @@ export interface FakeSecurityFixture {
   rootDir: string;
   securityBin: string;
   storePath: string;
+  /** Remove the temp directory and all contents. Call in afterAll/afterEach to avoid leaking seed material. */
+  cleanup: () => void;
 }
 
 export function securityStoreKey(service: string, account: string): string {
@@ -38,7 +40,8 @@ export function makeFakeSecurityFixture(
   const securityBin = join(binDir, "security");
   const logPath = join(rootDir, "security.log");
   const storePath = join(rootDir, "security-store.json");
-  writeFileSync(storePath, JSON.stringify(initialStore), "utf8");
+  writeFileSync(logPath, "", { encoding: "utf8", mode: 0o600 });
+  writeFileSync(storePath, JSON.stringify(initialStore), { encoding: "utf8", mode: 0o600 });
 
   writeFileSync(
     securityBin,
@@ -50,7 +53,7 @@ const storePath = process.env.WALLETERM_SECURITY_STORE_PATH;
 
 function appendLog() {
   if (logPath) {
-    fs.appendFileSync(logPath, JSON.stringify(args) + "\\n", "utf8");
+    fs.appendFileSync(logPath, JSON.stringify(args) + "\\n", { encoding: "utf8", mode: 0o600 });
   }
 }
 
@@ -73,7 +76,7 @@ function loadStore() {
 }
 
 function saveStore(store) {
-  fs.writeFileSync(storePath, JSON.stringify(store), "utf8");
+  fs.writeFileSync(storePath, JSON.stringify(store), { encoding: "utf8", mode: 0o600 });
 }
 
 appendLog();
@@ -135,5 +138,8 @@ fail("unexpected security invocation: " + args.join(" "));
     rootDir,
     securityBin,
     storePath,
+    cleanup: () => {
+      rmSync(rootDir, { recursive: true, force: true });
+    },
   };
 }

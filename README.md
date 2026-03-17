@@ -10,6 +10,7 @@ It is not a long-running daemon/service. The default model is:
 1. review unsigned payload
 2. sign what you can with configured keys from a supported secret store
 3. optionally submit via relayer (Channels) or RPC
+4. optionally pay x402-protected HTTP endpoints with a configured Stellar payer
 
 ## What It Does
 
@@ -19,6 +20,7 @@ It is not a long-running daemon/service. The default model is:
   - delegated signers (`G...`)
   - external Ed25519 signer map entries
 - Manages wallet/signer flows (lookup, deploy, add/remove signers)
+- Pays x402-protected endpoints from a Stellar keypair
 - Resolves key material from pluggable secret providers
 
 ## Prereqs
@@ -60,6 +62,7 @@ The simplest mental model is:
 4. `review`
 5. `sign`
 6. `submit` if needed
+7. `pay` for x402 endpoints if needed
 
 ## Core Usage
 
@@ -87,6 +90,18 @@ Submit (RPC):
 bun run cli submit --config ./walleterm.toml --network testnet --in ./signed.tx.xdr --mode rpc
 ```
 
+Pay an x402-protected endpoint:
+
+```bash
+bun run cli pay https://api.example.com/resource \
+  --config ./walleterm.toml \
+  --network testnet \
+  --secret-ref keychain://walleterm-testnet/payer_seed \
+  --format json
+```
+
+`pay` can also read the payer from `x402.default_payer_secret_ref` in `walleterm.toml`. `--out` writes the raw response body to disk and prints a JSON summary.
+
 ## Wallet Management
 
 Preferred introspection flow:
@@ -97,6 +112,8 @@ bun run cli wallet lookup --config ./walleterm.toml --network testnet --secret-r
 ```
 
 That command resolves the seed from the configured secret provider, derives the signer identity, reverse-lookups matching wallets, and returns the signers each wallet currently contains.
+
+Other lookup selectors are also supported: `--account`, `--address`, and `--contract-id`.
 
 Deploy wallet tx:
 
@@ -132,12 +149,21 @@ bun run cli wallet signer add \
   --out ./add-external.bundle.json
 ```
 
+Generate a fresh signer keypair:
+
+```bash
+bun run cli wallet signer generate
+```
+
+Setup commands create `delegated_seed` and `channels_api_key` by default, plus optional `deployer_seed`. External signer seeds like `external_ops_1_seed` must still be provisioned manually in your secret store.
+
 ## Commands and Help
 
 ```bash
 bun run cli --help
 bun run cli wallet --help
 bun run cli wallet signer --help
+bun run cli pay --help
 bun run cli setup op --help
 bun run cli setup keychain --help
 ```
@@ -157,4 +183,5 @@ bun run test:live:all
 - CLI usage details: [docs/walleterm-cli.md](docs/walleterm-cli.md)
 - Architecture and signing model: [docs/walleterm-architecture.md](docs/walleterm-architecture.md)
 - Credential-provider design: [docs/credential-providers.md](docs/credential-providers.md)
-- Security: [docs/security-remediation-plan.md](docs/security-remediation-plan.md)
+- Security status: [docs/security-remediation-plan.md](docs/security-remediation-plan.md)
+- Historical audit snapshot: [docs/security-audit.md](docs/security-audit.md)

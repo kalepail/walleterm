@@ -11,7 +11,57 @@ import {
   rpc,
   xdr,
 } from "@stellar/stellar-sdk";
-import type { NetworkConfig } from "./config.js";
+import { z } from "zod";
+import type { NetworkConfig, SignerMode, SmartAccountConfig } from "./config.js";
+
+// ---------------------------------------------------------------------------
+// Zod schemas for indexer response validation
+// ---------------------------------------------------------------------------
+
+/** Stellar contract ID: starts with "C", 56 characters, valid StrKey. */
+const StellarContractId = z.string().regex(/^C[A-Z0-9]{55}$/, "Invalid Stellar contract ID");
+
+/** Stellar public key (G-address): starts with "G", 56 characters, valid StrKey. */
+const StellarPublicKey = z.string().regex(/^G[A-Z0-9]{55}$/, "Invalid Stellar public key");
+
+const IndexerContractSummarySchema = z.object({
+  contract_id: StellarContractId,
+  context_rule_count: z.number(),
+  external_signer_count: z.number(),
+  delegated_signer_count: z.number(),
+  native_signer_count: z.number(),
+  first_seen_ledger: z.number(),
+  last_seen_ledger: z.number(),
+  context_rule_ids: z.array(z.number()),
+});
+
+const AddressLookupResponseSchema = z.object({
+  signerAddress: StellarPublicKey,
+  contracts: z.array(IndexerContractSummarySchema),
+  count: z.number(),
+});
+
+const CredentialLookupResponseSchema = z.object({
+  credentialId: z.string(),
+  contracts: z.array(IndexerContractSummarySchema),
+  count: z.number(),
+});
+
+const ContractSignerRowSchema = z.object({
+  context_rule_id: z.number(),
+  signer_type: z.enum(["External", "Delegated", "Native"]),
+  signer_address: z.union([StellarPublicKey, StellarContractId]).nullable(),
+  credential_id: z.string().nullable(),
+});
+
+const ContractSignersResponseSchema = z.object({
+  contractId: StellarContractId,
+  signers: z.array(ContractSignerRowSchema),
+});
+
+// ---------------------------------------------------------------------------
+// TypeScript interfaces (kept for external consumers)
+// ---------------------------------------------------------------------------
 
 export interface IndexerContractSummary {
   contract_id: string;
@@ -48,6 +98,32 @@ export interface ContractSignersResponse {
   signers: ContractSignerRow[];
 }
 
+export interface ReconciledExternalSigner {
+  verifier_contract_id: string;
+  public_key_hex: string;
+}
+
+export interface SignerReconciliation {
+  mode: SignerMode;
+  ok: boolean;
+  configured: {
+    delegated: string[];
+    external: ReconciledExternalSigner[];
+  };
+  onchain: {
+    delegated: string[];
+    external: ReconciledExternalSigner[];
+  };
+  missing: {
+    delegated: string[];
+    external: ReconciledExternalSigner[];
+  };
+  extra: {
+    delegated: string[];
+    external: ReconciledExternalSigner[];
+  };
+}
+
 export interface AuthBundleInput {
   kind: "bundle";
   func: string;
@@ -66,6 +142,37 @@ function normalizeHex(hex: string): string {
   return hex.toLowerCase().replace(/^0x/, "");
 }
 
+function compositeExternalSignerKey(
+  verifierContractId: string,
+  publicKeyHex: string,
+): string {
+  return `${verifierContractId}|${normalizeHex(publicKeyHex)}`;
+}
+
+function sortExternalSigners(signers: ReconciledExternalSigner[]): ReconciledExternalSigner[] {
+  return [...signers].sort((a, b) => {
+    const left = `${a.verifier_contract_id}|${a.public_key_hex}`;
+    const right = `${b.verifier_contract_id}|${b.public_key_hex}`;
+    return left.localeCompare(right);
+  });
+}
+
+/**
+ * Returns the deterministic deployer keypair for the Smart Account Kit.
+ *
+ * This keypair is **intentionally deterministic** — it is derived by hashing the
+ * well-known public constant `"openzeppelin-smart-account-kit"`. Anyone can
+ * reproduce this exact keypair from the source code; this is by design.
+ *
+ * It follows the shared deployer convention established by OpenZeppelin's Smart
+ * Account Kit so that all participants derive the same contract addresses for a
+ * given salt, enabling predictable cross-tool interoperability.
+ *
+ * **Security note:** Because the private key is publicly derivable, the deployer
+ * account should never hold meaningful balances. It exists solely to act as the
+ * `deployer` source for `createCustomContract` operations, which are then
+ * submitted (and funded) via a relay or other fee-paying mechanism.
+ */
 export function smartAccountKitDeployerKeypair(): Keypair {
   return Keypair.fromRawEd25519Seed(hash(Buffer.from(SMART_ACCOUNT_KIT_DEPLOYER_SEED_LABEL)));
 }
@@ -88,7 +195,7 @@ function randomNonceInt64(): xdr.Int64 {
   return xdr.Int64.fromString(value.toString());
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
+async function fetchJson<T>(url: string, schema?: z.ZodType<T>): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
@@ -96,7 +203,11 @@ async function fetchJson<T>(url: string): Promise<T> {
     if (!response.ok) {
       throw new Error(`Indexer request failed (${response.status}): ${url}`);
     }
-    return (await response.json()) as T;
+    const body = await response.json();
+    if (schema) {
+      return schema.parse(body);
+    }
+    return body as T;
   } finally {
     clearTimeout(timeout);
   }
@@ -118,6 +229,7 @@ export async function discoverContractsByAddress(
 ): Promise<AddressLookupResponse> {
   return fetchJson<AddressLookupResponse>(
     `${indexerUrl.replace(/\/$/, "")}/api/lookup/address/${encodeURIComponent(address)}`,
+    AddressLookupResponseSchema,
   );
 }
 
@@ -127,6 +239,7 @@ export async function discoverContractsByCredentialId(
 ): Promise<CredentialLookupResponse> {
   return fetchJson<CredentialLookupResponse>(
     `${indexerUrl.replace(/\/$/, "")}/api/lookup/${encodeURIComponent(credentialId)}`,
+    CredentialLookupResponseSchema,
   );
 }
 
@@ -136,7 +249,111 @@ export async function listContractSigners(
 ): Promise<ContractSignersResponse> {
   return fetchJson<ContractSignersResponse>(
     `${indexerUrl.replace(/\/$/, "")}/api/contract/${encodeURIComponent(contractId)}/signers`,
+    ContractSignersResponseSchema,
   );
+}
+
+export function reconcileContractSigners(
+  account: SmartAccountConfig,
+  onchainSigners: ContractSignerRow[],
+  mode: SignerMode = "subset",
+): SignerReconciliation {
+  const configuredDelegated = [...new Set((account.delegated_signers ?? [])
+    .filter((row) => row.enabled !== false)
+    .map((row) => row.address))].sort();
+
+  const configuredExternal = sortExternalSigners(
+    [...new Map(
+      (account.external_signers ?? [])
+        .filter((row) => row.enabled !== false)
+        .map((row) => {
+          const signer = {
+            verifier_contract_id: row.verifier_contract_id,
+            public_key_hex: normalizeHex(row.public_key_hex),
+          };
+          return [
+            compositeExternalSignerKey(signer.verifier_contract_id, signer.public_key_hex),
+            signer,
+          ] as const;
+        }),
+    ).values()],
+  );
+
+  const onchainDelegated = [...new Set(
+    onchainSigners
+      .filter((row) => row.signer_type === "Delegated" && typeof row.signer_address === "string")
+      .map((row) => row.signer_address as string),
+  )].sort();
+
+  const onchainExternal = sortExternalSigners(
+    [...new Map(
+      onchainSigners
+        .filter(
+          (row) =>
+            row.signer_type === "External" &&
+            typeof row.signer_address === "string" &&
+            typeof row.credential_id === "string",
+        )
+        .map((row) => {
+          const signer = {
+            verifier_contract_id: row.signer_address as string,
+            public_key_hex: normalizeHex(row.credential_id as string),
+          };
+          return [
+            compositeExternalSignerKey(signer.verifier_contract_id, signer.public_key_hex),
+            signer,
+          ] as const;
+        }),
+    ).values()],
+  );
+
+  const onchainDelegatedSet = new Set(onchainDelegated);
+  const configuredDelegatedSet = new Set(configuredDelegated);
+  const onchainExternalSet = new Set(
+    onchainExternal.map((row) => compositeExternalSignerKey(row.verifier_contract_id, row.public_key_hex)),
+  );
+  const configuredExternalSet = new Set(
+    configuredExternal.map((row) =>
+      compositeExternalSignerKey(row.verifier_contract_id, row.public_key_hex),
+    ),
+  );
+
+  const missingDelegated = configuredDelegated.filter((address) => !onchainDelegatedSet.has(address));
+  const missingExternal = configuredExternal.filter(
+    (row) =>
+      !onchainExternalSet.has(compositeExternalSignerKey(row.verifier_contract_id, row.public_key_hex)),
+  );
+  const extraDelegated = onchainDelegated.filter((address) => !configuredDelegatedSet.has(address));
+  const extraExternal = onchainExternal.filter(
+    (row) =>
+      !configuredExternalSet.has(compositeExternalSignerKey(row.verifier_contract_id, row.public_key_hex)),
+  );
+
+  const ok =
+    missingDelegated.length === 0 &&
+    missingExternal.length === 0 &&
+    (mode === "subset" || (extraDelegated.length === 0 && extraExternal.length === 0));
+
+  return {
+    mode,
+    ok,
+    configured: {
+      delegated: configuredDelegated,
+      external: configuredExternal,
+    },
+    onchain: {
+      delegated: onchainDelegated,
+      external: onchainExternal,
+    },
+    missing: {
+      delegated: missingDelegated,
+      external: missingExternal,
+    },
+    extra: {
+      delegated: extraDelegated,
+      external: extraExternal,
+    },
+  };
 }
 
 export function makeDelegatedSignerScVal(address: string): xdr.ScVal {

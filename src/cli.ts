@@ -12,7 +12,13 @@ import {
   signInput,
   writeOutput,
 } from "./core.js";
-import { loadConfig, resolveNetwork } from "./config.js";
+import {
+  loadConfig,
+  resolveAccount,
+  resolveNetwork,
+  type SmartAccountConfig,
+  type WalletermConfig,
+} from "./config.js";
 import {
   createWalletermSigner,
   createX402HttpHandler,
@@ -33,6 +39,7 @@ import {
   listContractSigners,
   makeDelegatedSignerScVal,
   makeExternalSignerScVal,
+  reconcileContractSigners,
   resolveIndexerUrl,
   smartAccountKitDeployerKeypair,
 } from "./wallet.js";
@@ -110,6 +117,7 @@ interface PayOpts {
   format: string;
   out?: string;
   dryRun: boolean;
+  yes: boolean;
 }
 
 interface SetupOpOpts {
@@ -225,36 +233,40 @@ async function resolveSignerMutationTarget(
 
   if (hasSecretRef) {
     const resolver = new SecretResolver();
-    const secret = await resolver.resolve(opts.secretRef!);
-    let keypair: Keypair;
     try {
-      keypair = Keypair.fromSecret(secret);
-    } catch {
-      throw new Error("secret-ref must resolve to a valid Stellar secret seed (S...)");
-    }
+      const secret = await resolver.resolve(opts.secretRef!);
+      let keypair: Keypair;
+      try {
+        keypair = Keypair.fromSecret(secret);
+      } catch {
+        throw new Error("secret-ref must resolve to a valid Stellar secret seed (S...)");
+      }
 
-    if (hasVerifierContractId) {
-      const publicKeyHex = credentialIdFromKeypair(keypair);
+      if (hasVerifierContractId) {
+        const publicKeyHex = credentialIdFromKeypair(keypair);
+        return {
+          signerScVal: makeExternalSignerScVal(opts.verifierContractId!, publicKeyHex),
+          signerDescriptor: {
+            type: "External",
+            verifier_contract_id: opts.verifierContractId,
+            public_key_hex: publicKeyHex,
+            secret_ref: opts.secretRef,
+          },
+        };
+      }
+
+      const delegatedAddress = keypair.publicKey();
       return {
-        signerScVal: makeExternalSignerScVal(opts.verifierContractId!, publicKeyHex),
+        signerScVal: makeDelegatedSignerScVal(delegatedAddress),
         signerDescriptor: {
-          type: "External",
-          verifier_contract_id: opts.verifierContractId,
-          public_key_hex: publicKeyHex,
+          type: "Delegated",
+          address: delegatedAddress,
           secret_ref: opts.secretRef,
         },
       };
+    } finally {
+      resolver.clearCache();
     }
-
-    const delegatedAddress = keypair.publicKey();
-    return {
-      signerScVal: makeDelegatedSignerScVal(delegatedAddress),
-      signerDescriptor: {
-        type: "Delegated",
-        address: delegatedAddress,
-        secret_ref: opts.secretRef,
-      },
-    };
   }
 
   if (hasDelegatedAddress) {
@@ -300,52 +312,146 @@ async function runSignerMutation(
     );
   }
 
+  await enforceStrictOnchainSigners(config, network, accountAlias, account);
+
   const resolver = new SecretResolver();
-  const accountRef = { alias: accountAlias, account };
-  const runtimeSigners = await loadRuntimeSigners(accountRef, resolver);
+  try {
+    const accountRef = { alias: accountAlias, account };
+    const runtimeSigners = await loadRuntimeSigners(accountRef, resolver);
 
-  const ttlSeconds = parseOptionalInt(opts.ttlSeconds) ?? config.app.default_ttl_seconds ?? 30;
-  const ledgerSeconds = config.app.assumed_ledger_time_seconds ?? 6;
-  const latestLedger = parseOptionalInt(opts.latestLedger);
-  const expirationLedger = await computeExpirationLedger(
-    network,
-    ttlSeconds,
-    ledgerSeconds,
-    latestLedger,
+    const ttlSeconds = parseOptionalInt(opts.ttlSeconds) ?? config.app.default_ttl_seconds ?? 30;
+    const ledgerSeconds = config.app.assumed_ledger_time_seconds ?? 6;
+    const latestLedger = parseOptionalInt(opts.latestLedger);
+    const expirationLedger = await computeExpirationLedger(
+      network,
+      ttlSeconds,
+      ledgerSeconds,
+      latestLedger,
+    );
+
+    const contextRuleId = requireNonNegativeInt(
+      parseOptionalInt(opts.contextRuleId),
+      "context-rule-id",
+    );
+
+    const parsed = buildSignerMutationBundle(
+      account.contract_id,
+      functionName,
+      contextRuleId,
+      signerScVal,
+      expirationLedger,
+    );
+
+    const { output, report } = signInput(parsed, {
+      config,
+      networkName,
+      network,
+      accountRef,
+      runtimeSigners,
+      expirationLedger,
+    });
+
+    writeOutput(opts.out, output);
+    process.stdout.write(
+      `${JSON.stringify({
+        operation: functionName,
+        contract_id: account.contract_id,
+        context_rule_id: contextRuleId,
+        target_signer: signerDescriptor,
+        ...report,
+      })}\n`,
+    );
+  } finally {
+    resolver.clearCache();
+  }
+}
+
+function formatSignerReconciliationIssue(kind: "missing" | "extra", reconciliation: {
+  delegated: string[];
+  external: Array<{ verifier_contract_id: string; public_key_hex: string }>;
+}): string | null {
+  const parts: string[] = [];
+  if (reconciliation.delegated.length > 0) {
+    parts.push(`delegated=[${reconciliation.delegated.join(", ")}]`);
+  }
+  if (reconciliation.external.length > 0) {
+    parts.push(
+      `external=[${reconciliation.external
+        .map((row) => `${row.verifier_contract_id}:${row.public_key_hex}`)
+        .join(", ")}]`,
+    );
+  }
+  if (parts.length === 0) return null;
+  return `${kind} ${parts.join(" ")}`;
+}
+
+async function getSignerReconciliation(
+  config: WalletermConfig,
+  network: ReturnType<typeof resolveNetwork>["config"],
+  _accountAlias: string,
+  account: SmartAccountConfig,
+) {
+  const indexerUrl = resolveIndexerUrl(network);
+  const onchain = await listContractSigners(indexerUrl, account.contract_id);
+  return reconcileContractSigners(
+    account,
+    onchain.signers,
+    config.app.onchain_signer_mode ?? "subset",
   );
+}
 
-  const contextRuleId = requireNonNegativeInt(
-    parseOptionalInt(opts.contextRuleId),
-    "context-rule-id",
+async function enforceStrictOnchainSigners(
+  config: WalletermConfig,
+  network: ReturnType<typeof resolveNetwork>["config"],
+  accountAlias: string,
+  account: SmartAccountConfig,
+): Promise<void> {
+  if (!config.app.strict_onchain) {
+    return;
+  }
+
+  const reconciliation = await getSignerReconciliation(config, network, accountAlias, account);
+  if (reconciliation.ok) {
+    return;
+  }
+
+  const parts = [
+    formatSignerReconciliationIssue("missing", reconciliation.missing),
+    reconciliation.mode === "exact"
+      ? formatSignerReconciliationIssue("extra", reconciliation.extra)
+      : null,
+  ].filter(Boolean);
+
+  throw new Error(
+    `Strict on-chain signer reconciliation failed for account '${accountAlias}' (${reconciliation.mode}). ${parts.join("; ")}`,
   );
+}
 
-  const parsed = buildSignerMutationBundle(
-    account.contract_id,
-    functionName,
-    contextRuleId,
-    signerScVal,
-    expirationLedger,
-  );
+function resolveWalletCreateWasmHash(
+  config: WalletermConfig,
+  networkName: string,
+  opts: WalletCreateOpts,
+): string {
+  const accountRef = resolveAccount(config, networkName, opts.account);
+  const configuredHash = accountRef?.account.expected_wasm_hash;
+  const explicitHash = opts.wasmHash;
 
-  const { output, report } = signInput(parsed, {
-    config,
-    networkName,
-    network,
-    accountRef,
-    runtimeSigners,
-    expirationLedger,
-  });
+  if (explicitHash && configuredHash && explicitHash.toLowerCase() !== configuredHash.toLowerCase()) {
+    throw new Error(
+      `wallet create wasm hash mismatch for account '${accountRef!.alias}': explicit --wasm-hash does not match smart_accounts.${accountRef!.alias}.expected_wasm_hash`,
+    );
+  }
 
-  writeOutput(opts.out, output);
-  process.stdout.write(
-    `${JSON.stringify({
-      operation: functionName,
-      contract_id: account.contract_id,
-      context_rule_id: contextRuleId,
-      target_signer: signerDescriptor,
-      ...report,
-    })}\n`,
-  );
+  const resolved = explicitHash ?? configuredHash;
+  if (!resolved) {
+    throw new Error(
+      opts.account
+        ? `No wasm hash provided. Pass --wasm-hash or set smart_accounts.${opts.account}.expected_wasm_hash.`
+        : "No wasm hash provided. Pass --wasm-hash or select/configure an account with expected_wasm_hash.",
+    );
+  }
+
+  return resolved;
 }
 
 const program = new Command();
@@ -397,24 +503,43 @@ program
     }
 
     const resolver = new SecretResolver();
-    const runtimeSigners = await loadRuntimeSigners(accountRef, resolver);
-    const signability = canSignInput(parsed, {
-      config,
-      networkName,
-      network,
-      accountRef,
-      runtimeSigners,
-      expirationLedger: 0,
-    });
+    try {
+      const runtimeSigners = await loadRuntimeSigners(accountRef, resolver);
+      const signability = canSignInput(parsed, {
+        config,
+        networkName,
+        network,
+        accountRef,
+        runtimeSigners,
+        expirationLedger: 0,
+      });
 
-    process.stdout.write(
-      `${JSON.stringify({
-        inspection,
-        signability,
-        account: accountRef.alias,
-        contract_id: accountRef.account.contract_id,
-      })}\n`,
-    );
+      let signerReconciliation: unknown = null;
+      let signerReconciliationError: string | null = null;
+      try {
+        signerReconciliation = await getSignerReconciliation(
+          config,
+          network,
+          accountRef.alias,
+          accountRef.account,
+        );
+      } catch (error) {
+        signerReconciliationError = error instanceof Error ? error.message : String(error);
+      }
+
+      process.stdout.write(
+        `${JSON.stringify({
+          inspection,
+          signability,
+          account: accountRef.alias,
+          contract_id: accountRef.account.contract_id,
+          signer_reconciliation: signerReconciliation,
+          signer_reconciliation_error: signerReconciliationError,
+        })}\n`,
+      );
+    } finally {
+      resolver.clearCache();
+    }
   });
 
 program
@@ -440,30 +565,35 @@ program
     }
 
     const resolver = new SecretResolver();
-    const runtimeSigners = await loadRuntimeSigners(accountRef, resolver);
+    try {
+      await enforceStrictOnchainSigners(config, network, accountRef.alias, accountRef.account);
+      const runtimeSigners = await loadRuntimeSigners(accountRef, resolver);
 
-    const ttlSeconds = parseOptionalInt(opts.ttlSeconds) ?? config.app.default_ttl_seconds ?? 30;
-    const ledgerSeconds = config.app.assumed_ledger_time_seconds ?? 6;
-    const latestLedger = parseOptionalInt(opts.latestLedger);
+      const ttlSeconds = parseOptionalInt(opts.ttlSeconds) ?? config.app.default_ttl_seconds ?? 30;
+      const ledgerSeconds = config.app.assumed_ledger_time_seconds ?? 6;
+      const latestLedger = parseOptionalInt(opts.latestLedger);
 
-    const expirationLedger = await computeExpirationLedger(
-      network,
-      ttlSeconds,
-      ledgerSeconds,
-      latestLedger,
-    );
+      const expirationLedger = await computeExpirationLedger(
+        network,
+        ttlSeconds,
+        ledgerSeconds,
+        latestLedger,
+      );
 
-    const { output, report } = signInput(parsed, {
-      config,
-      networkName,
-      network,
-      accountRef,
-      runtimeSigners,
-      expirationLedger,
-    });
+      const { output, report } = signInput(parsed, {
+        config,
+        networkName,
+        network,
+        accountRef,
+        runtimeSigners,
+        expirationLedger,
+      });
 
-    writeOutput(opts.out, output);
-    process.stdout.write(`${JSON.stringify(report)}\n`);
+      writeOutput(opts.out, output);
+      process.stdout.write(`${JSON.stringify(report)}\n`);
+    } finally {
+      resolver.clearCache();
+    }
   });
 
 program
@@ -498,13 +628,17 @@ program
     }
 
     const resolver = new SecretResolver();
-    const result = await submitViaChannels(parsed, network, resolver, {
-      channelsBaseUrl: opts.channelsBaseUrl,
-      channelsApiKey: opts.channelsApiKey,
-      channelsApiKeyRef: opts.channelsApiKeyRef,
-      pluginId: opts.pluginId,
-    } satisfies SubmitNetworkOverrides);
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+    try {
+      const result = await submitViaChannels(parsed, network, resolver, {
+        channelsBaseUrl: opts.channelsBaseUrl,
+        channelsApiKey: opts.channelsApiKey,
+        channelsApiKeyRef: opts.channelsApiKeyRef,
+        pluginId: opts.pluginId,
+      } satisfies SubmitNetworkOverrides);
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    } finally {
+      resolver.clearCache();
+    }
   });
 
 program
@@ -519,6 +653,7 @@ program
   .option("--format <mode>", "body | json", "body")
   .option("--out <path>", "write response body to a file instead of stdout")
   .option("--dry-run", "show 402 details without paying", false)
+  .option("--yes", "skip max_payment_amount cap check", false)
   .option("--config <path>", "config TOML path", "walleterm.toml")
   .action(async (url: string, opts: PayOpts) => {
     const config = loadConfig(opts.config);
@@ -532,71 +667,79 @@ program
     }
 
     const resolver = new SecretResolver();
-    const secret = await resolver.resolve(secretRef);
-    let keypair: Keypair;
     try {
-      keypair = Keypair.fromSecret(secret);
-    } catch {
-      throw new Error("secret-ref must resolve to a valid Stellar secret seed (S...)");
-    }
-
-    const x402Network = passphraseToX402Network(network.network_passphrase);
-    const signer = createWalletermSigner(keypair, x402Network);
-    const handler = createX402HttpHandler(signer, x402Network, network.rpc_url);
-
-    const headers: Record<string, string> = {};
-    for (const h of opts.header) {
-      const idx = h.indexOf(":");
-      if (idx < 0) {
-        throw new Error(`Invalid header format: ${h}. Expected "Name: Value".`);
+      const secret = await resolver.resolve(secretRef);
+      let keypair: Keypair;
+      try {
+        keypair = Keypair.fromSecret(secret);
+      } catch {
+        throw new Error("secret-ref must resolve to a valid Stellar secret seed (S...)");
       }
-      headers[h.slice(0, idx).trim()] = h.slice(idx + 1).trim();
-    }
 
-    const result = await executeX402Request(handler, {
-      url,
-      method: opts.method,
-      headers: Object.keys(headers).length > 0 ? headers : undefined,
-      body: opts.data,
-      x402Network,
-      dryRun: opts.dryRun,
-      fetchFn: fetch,
-    });
+      const x402Network = passphraseToX402Network(network.network_passphrase);
+      const signer = createWalletermSigner(keypair, x402Network);
+      const handler = createX402HttpHandler(signer, x402Network, network.rpc_url);
 
-    if (opts.out) {
-      const bodyBuf = Buffer.from(result.body);
-      writeFileSync(opts.out, bodyBuf);
-      const contentType = result.responseHeaders["content-type"];
-      process.stdout.write(
-        `${JSON.stringify({
-          paid: result.paid,
-          status: result.status,
-          payer: keypair.publicKey(),
-          content_type: contentType ?? null,
-          size: bodyBuf.length,
-          file: opts.out,
-          settlement: result.settlement ?? null,
-        })}\n`,
-      );
-    } else if (opts.format === "json") {
-      process.stdout.write(
-        `${JSON.stringify({
-          paid: result.paid,
-          status: result.status,
-          payer: keypair.publicKey(),
-          response_headers: result.responseHeaders,
-          payment_required: result.paymentRequired,
-          payment_payload: result.paymentPayload,
-          settlement: result.settlement,
-          body: Buffer.from(result.body).toString("base64"),
-        })}\n`,
-      );
-    } else {
-      const contentType = result.responseHeaders["content-type"];
-      if (contentType) {
-        process.stderr.write(`content-type: ${contentType}\n`);
+      const headers: Record<string, string> = {};
+      for (const h of opts.header) {
+        const idx = h.indexOf(":");
+        if (idx < 0) {
+          throw new Error(`Invalid header format: ${h}. Expected "Name: Value".`);
+        }
+        headers[h.slice(0, idx).trim()] = h.slice(idx + 1).trim();
       }
-      process.stdout.write(Buffer.from(result.body));
+
+      const result = await executeX402Request(handler, {
+        url,
+        method: opts.method,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
+        body: opts.data,
+        x402Network,
+        dryRun: opts.dryRun,
+        maxPaymentAmount: config.x402?.max_payment_amount,
+        yes: opts.yes,
+        fetchFn: fetch,
+      });
+
+      if (opts.out) {
+        const bodyBuf = Buffer.from(result.body);
+        writeFileSync(opts.out, bodyBuf, { mode: 0o600 });
+        const contentType = result.responseHeaders["content-type"];
+        process.stdout.write(
+          `${JSON.stringify({
+            paid: result.paid,
+            status: result.status,
+            payer: keypair.publicKey(),
+            content_type: contentType ?? null,
+            size: bodyBuf.length,
+            file: opts.out,
+            settlement: result.settlement ?? null,
+            settlement_error: result.settlementError ?? null,
+          })}\n`,
+        );
+      } else if (opts.format === "json") {
+        process.stdout.write(
+          `${JSON.stringify({
+            paid: result.paid,
+            status: result.status,
+            payer: keypair.publicKey(),
+            response_headers: result.responseHeaders,
+            payment_required: result.paymentRequired,
+            payment_payload: result.paymentPayload,
+            settlement: result.settlement,
+            settlement_error: result.settlementError ?? null,
+            body: Buffer.from(result.body).toString("base64"),
+          })}\n`,
+        );
+      } else {
+        const contentType = result.responseHeaders["content-type"];
+        if (contentType) {
+          process.stderr.write(`content-type: ${contentType}\n`);
+        }
+        process.stdout.write(Buffer.from(result.body));
+      }
+    } finally {
+      resolver.clearCache();
     }
   });
 
@@ -819,53 +962,57 @@ wallet
     }
 
     const resolver = new SecretResolver();
-    const secret = await resolver.resolve(opts.secretRef!);
-    let keypair: Keypair;
     try {
-      keypair = Keypair.fromSecret(secret);
-    } catch {
-      throw new Error("secret-ref must resolve to a valid Stellar secret seed (S...)");
-    }
+      const secret = await resolver.resolve(opts.secretRef!);
+      let keypair: Keypair;
+      try {
+        keypair = Keypair.fromSecret(secret);
+      } catch {
+        throw new Error("secret-ref must resolve to a valid Stellar secret seed (S...)");
+      }
 
-    const signerAddress = keypair.publicKey();
-    const credentialId = credentialIdFromKeypair(keypair);
-    const [delegated, external] = await Promise.all([
-      discoverContractsByAddress(indexerUrl, signerAddress),
-      discoverContractsByCredentialId(indexerUrl, credentialId),
-    ]);
-    const sourceByContractId = new Map<string, Set<"delegated" | "external">>();
-    for (const contract of delegated.contracts) {
-      const existing = sourceByContractId.get(contract.contract_id) ?? new Set();
-      existing.add("delegated");
-      sourceByContractId.set(contract.contract_id, existing);
+      const signerAddress = keypair.publicKey();
+      const credentialId = credentialIdFromKeypair(keypair);
+      const [delegated, external] = await Promise.all([
+        discoverContractsByAddress(indexerUrl, signerAddress),
+        discoverContractsByCredentialId(indexerUrl, credentialId),
+      ]);
+      const sourceByContractId = new Map<string, Set<"delegated" | "external">>();
+      for (const contract of delegated.contracts) {
+        const existing = sourceByContractId.get(contract.contract_id) ?? new Set();
+        existing.add("delegated");
+        sourceByContractId.set(contract.contract_id, existing);
+      }
+      for (const contract of external.contracts) {
+        const existing = sourceByContractId.get(contract.contract_id) ?? new Set();
+        existing.add("external");
+        sourceByContractId.set(contract.contract_id, existing);
+      }
+      const contracts = await enrichContractsWithOnchainSigners(
+        indexerUrl,
+        dedupeContractsById([...delegated.contracts, ...external.contracts]).map((contract) => {
+          const lookupTypes = sourceByContractId.get(contract.contract_id)!;
+          return {
+            ...contract,
+            lookup_types: [...lookupTypes],
+          };
+        }),
+      );
+      process.stdout.write(
+        `${JSON.stringify({
+          mode: "secret-ref",
+          query: {
+            secret_ref: opts.secretRef,
+            derived_address: signerAddress,
+            credential_id: credentialId,
+          },
+          count: contracts.length,
+          wallets: contracts,
+        })}\n`,
+      );
+    } finally {
+      resolver.clearCache();
     }
-    for (const contract of external.contracts) {
-      const existing = sourceByContractId.get(contract.contract_id) ?? new Set();
-      existing.add("external");
-      sourceByContractId.set(contract.contract_id, existing);
-    }
-    const contracts = await enrichContractsWithOnchainSigners(
-      indexerUrl,
-      dedupeContractsById([...delegated.contracts, ...external.contracts]).map((contract) => {
-        const lookupTypes = sourceByContractId.get(contract.contract_id)!;
-        return {
-          ...contract,
-          lookup_types: [...lookupTypes],
-        };
-      }),
-    );
-    process.stdout.write(
-      `${JSON.stringify({
-        mode: "secret-ref",
-        query: {
-          secret_ref: opts.secretRef,
-          derived_address: signerAddress,
-          credential_id: credentialId,
-        },
-        count: contracts.length,
-        wallets: contracts,
-      })}\n`,
-    );
   });
 
 const signer = wallet.command("signer").description("manage smart-account signers");
@@ -932,7 +1079,8 @@ wallet
     "--kit-raw-id <value>",
     "derive deployer+salt using smart-account-kit deterministic scheme from raw string",
   )
-  .requiredOption("--wasm-hash <hex>", "smart account wasm hash (32-byte hex)")
+  .option("--account <alias>", "smart account alias for config-driven defaults")
+  .option("--wasm-hash <hex>", "smart account wasm hash (32-byte hex)")
   .requiredOption("--out <path>", "output signed transaction xdr path")
   .option("--config <path>", "config TOML path", "walleterm.toml")
   .option("--network <name>", "network name")
@@ -955,103 +1103,110 @@ wallet
   .option("--plugin-id <id>", "channels plugin id (self-hosted relayer mode)")
   .action(async (opts: WalletCreateOpts) => {
     const config = loadConfig(opts.config);
-    const { config: network } = resolveNetwork(config, opts.network);
+    const { name: networkName, config: network } = resolveNetwork(config, opts.network);
     const resolver = new SecretResolver();
 
-    let deployer: Keypair;
-    let createSaltHex = opts.saltHex;
-    const usingKitDeterministic = typeof opts.kitRawId === "string";
-    const effectiveDeployerRef = opts.deployerSecretRef ?? network.deployer_secret_ref;
-    const usingCustomDeployer = Boolean(effectiveDeployerRef);
+    try {
+      let deployer: Keypair;
+      let createSaltHex = opts.saltHex;
+      const usingKitDeterministic = typeof opts.kitRawId === "string";
+      const effectiveDeployerRef = opts.deployerSecretRef ?? network.deployer_secret_ref;
+      const usingCustomDeployer = Boolean(effectiveDeployerRef);
 
-    if (usingKitDeterministic) {
-      if (opts.deployerSecretRef) {
-        throw new Error("Do not pass --deployer-secret-ref with --kit-raw-id.");
-      }
-      if (opts.saltHex) {
-        throw new Error("Do not pass --salt-hex with --kit-raw-id (salt is derived).");
-      }
-      deployer = smartAccountKitDeployerKeypair();
-      createSaltHex = deriveSaltHexFromRawString(opts.kitRawId!);
-    } else if (usingCustomDeployer) {
-      const deployerSeed = await resolver.resolve(effectiveDeployerRef!);
-      try {
-        deployer = Keypair.fromSecret(deployerSeed);
-      } catch {
-        throw new Error("deployer secret must resolve to a valid Stellar secret seed (S...)");
-      }
-    } else {
-      deployer = smartAccountKitDeployerKeypair();
-    }
-
-    const signers: xdr.ScVal[] = [];
-    for (const delegated of opts.delegatedAddress) {
-      signers.push(makeDelegatedSignerScVal(delegated));
-    }
-
-    for (const row of opts.externalEd25519) {
-      const separator = row.indexOf(":");
-      if (separator < 0) {
-        throw new Error(
-          `Invalid --external-ed25519 value '${row}'. Expected verifierContractId:publicKeyHex`,
-        );
-      }
-      const verifier = row.slice(0, separator);
-      const publicKeyHex = row.slice(separator + 1);
-      signers.push(makeExternalSignerScVal(verifier, publicKeyHex));
-    }
-
-    const { contractId, txXdr, saltHex } = await createWalletDeployTx({
-      network,
-      deployer,
-      wasmHashHex: opts.wasmHash,
-      signers,
-      saltHex: createSaltHex,
-      sequenceOverride: opts.sequence,
-      fee: opts.fee,
-      skipPrepare: Boolean(opts.skipPrepare),
-    });
-
-    writeOutput(opts.out, txXdr);
-
-    let submission: unknown;
-    if (opts.submit) {
-      const mode = opts.submitMode ?? "channels";
-      if (mode === "rpc") {
-        const rpcResult = await submitTxXdrViaRpc(txXdr, network);
-        submission = {
-          mode: "rpc",
-          request_kind: "tx",
-          ...rpcResult,
-        };
+      if (usingKitDeterministic) {
+        if (opts.deployerSecretRef) {
+          throw new Error("Do not pass --deployer-secret-ref with --kit-raw-id.");
+        }
+        if (opts.saltHex) {
+          throw new Error("Do not pass --salt-hex with --kit-raw-id (salt is derived).");
+        }
+        deployer = smartAccountKitDeployerKeypair();
+        createSaltHex = deriveSaltHexFromRawString(opts.kitRawId!);
+      } else if (usingCustomDeployer) {
+        const deployerSeed = await resolver.resolve(effectiveDeployerRef!);
+        try {
+          deployer = Keypair.fromSecret(deployerSeed);
+        } catch {
+          throw new Error("deployer secret must resolve to a valid Stellar secret seed (S...)");
+        }
       } else {
-        const parsed = parseInputFile(opts.out);
-        submission = await submitViaChannels(parsed, network, resolver, {
-          channelsBaseUrl: opts.channelsBaseUrl,
-          channelsApiKey: opts.channelsApiKey,
-          channelsApiKeyRef: opts.channelsApiKeyRef,
-          pluginId: opts.pluginId,
-        } satisfies SubmitNetworkOverrides);
+        deployer = smartAccountKitDeployerKeypair();
       }
-    }
 
-    process.stdout.write(
-      `${JSON.stringify({
-        contract_id: contractId,
-        deployer_public_key: deployer.publicKey(),
-        salt_hex: saltHex,
-        deterministic_mode: usingKitDeterministic
-          ? "smart-account-kit"
-          : usingCustomDeployer
-            ? "custom"
-            : "smart-account-kit-deployer",
-        deterministic_input: usingKitDeterministic ? opts.kitRawId : undefined,
-        signers_count: signers.length,
-        prepared: !opts.skipPrepare,
-        submitted: Boolean(opts.submit),
-        submission,
-      })}\n`,
-    );
+      const wasmHash = resolveWalletCreateWasmHash(config, networkName, opts);
+
+      const signers: xdr.ScVal[] = [];
+      for (const delegated of opts.delegatedAddress) {
+        signers.push(makeDelegatedSignerScVal(delegated));
+      }
+
+      for (const row of opts.externalEd25519) {
+        const separator = row.indexOf(":");
+        if (separator < 0) {
+          throw new Error(
+            `Invalid --external-ed25519 value '${row}'. Expected verifierContractId:publicKeyHex`,
+          );
+        }
+        const verifier = row.slice(0, separator);
+        const publicKeyHex = row.slice(separator + 1);
+        signers.push(makeExternalSignerScVal(verifier, publicKeyHex));
+      }
+
+      const { contractId, txXdr, saltHex } = await createWalletDeployTx({
+        network,
+        deployer,
+        wasmHashHex: wasmHash,
+        signers,
+        saltHex: createSaltHex,
+        sequenceOverride: opts.sequence,
+        fee: opts.fee,
+        skipPrepare: Boolean(opts.skipPrepare),
+      });
+
+      writeOutput(opts.out, txXdr);
+
+      let submission: unknown;
+      const shouldSubmit = Boolean(opts.submit) || config.app.default_submit_mode === "channels";
+      if (shouldSubmit) {
+        const mode = opts.submitMode ?? "channels";
+        if (mode === "rpc") {
+          const rpcResult = await submitTxXdrViaRpc(txXdr, network);
+          submission = {
+            mode: "rpc",
+            request_kind: "tx",
+            ...rpcResult,
+          };
+        } else {
+          const parsed = parseInputFile(opts.out);
+          submission = await submitViaChannels(parsed, network, resolver, {
+            channelsBaseUrl: opts.channelsBaseUrl,
+            channelsApiKey: opts.channelsApiKey,
+            channelsApiKeyRef: opts.channelsApiKeyRef,
+            pluginId: opts.pluginId,
+          } satisfies SubmitNetworkOverrides);
+        }
+      }
+
+      process.stdout.write(
+        `${JSON.stringify({
+          contract_id: contractId,
+          deployer_public_key: deployer.publicKey(),
+          salt_hex: saltHex,
+          deterministic_mode: usingKitDeterministic
+            ? "smart-account-kit"
+            : usingCustomDeployer
+              ? "custom"
+              : "smart-account-kit-deployer",
+          deterministic_input: usingKitDeterministic ? opts.kitRawId : undefined,
+          signers_count: signers.length,
+          prepared: !opts.skipPrepare,
+          submitted: shouldSubmit,
+          submission,
+        })}\n`,
+      );
+    } finally {
+      resolver.clearCache();
+    }
   });
 
 export async function runCli(argv: string[]): Promise<void> {

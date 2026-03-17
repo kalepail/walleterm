@@ -47,6 +47,7 @@ export interface SmartAccountConfig {
 
 export interface X402Config {
   default_payer_secret_ref?: string;
+  max_payment_amount?: string;
 }
 
 export interface WalletermConfig {
@@ -137,6 +138,9 @@ export function loadConfig(path: string): WalletermConfig {
       default_payer_secret_ref: x402Obj.default_payer_secret_ref
         ? String(x402Obj.default_payer_secret_ref)
         : undefined,
+      max_payment_amount: x402Obj.max_payment_amount
+        ? String(x402Obj.max_payment_amount)
+        : undefined,
     };
   }
 
@@ -171,6 +175,11 @@ function isInsecureUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isHex32Byte(value: string): boolean {
+  const normalized = value.toLowerCase().replace(/^0x/, "");
+  return /^[0-9a-f]{64}$/.test(normalized);
 }
 
 function warnInsecureUrl(field: string, url: string): void {
@@ -213,6 +222,13 @@ function validateConfig(config: WalletermConfig): void {
     throw new Error("app.assumed_ledger_time_seconds must be a valid number");
   }
 
+  if (config.x402?.max_payment_amount !== undefined) {
+    const val = Number(config.x402.max_payment_amount);
+    if (isNaN(val) || val < 0) {
+      throw new Error("x402.max_payment_amount must be a valid non-negative numeric string");
+    }
+  }
+
   for (const [name, network] of Object.entries(config.networks)) {
     if (!network.rpc_url) throw new Error(`networks.${name}.rpc_url is required`);
     if (!network.network_passphrase) {
@@ -223,6 +239,9 @@ function validateConfig(config: WalletermConfig): void {
     if (network.channels_base_url) {
       warnInsecureUrl(`networks.${name}.channels_base_url`, network.channels_base_url);
     }
+    if (network.x402_facilitator_url) {
+      warnInsecureUrl(`networks.${name}.x402_facilitator_url`, network.x402_facilitator_url);
+    }
   }
 
   for (const [alias, account] of Object.entries(config.smart_accounts)) {
@@ -232,6 +251,9 @@ function validateConfig(config: WalletermConfig): void {
     }
     if (!config.networks[account.network]) {
       throw new Error(`smart_accounts.${alias}.network '${account.network}' is not configured`);
+    }
+    if (account.expected_wasm_hash && !isHex32Byte(account.expected_wasm_hash)) {
+      throw new Error(`smart_accounts.${alias}.expected_wasm_hash must be a 32-byte hex string`);
     }
   }
 }

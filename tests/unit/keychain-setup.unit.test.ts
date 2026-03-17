@@ -195,4 +195,179 @@ process.exit(1);
       else process.env.PATH = prevPath;
     }
   });
+
+  it("rejects on non-macOS when no explicit security binary is provided", async () => {
+    const prevBin = process.env.WALLETERM_SECURITY_BIN;
+    delete process.env.WALLETERM_SECURITY_BIN;
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      await expect(
+        setupMacOSKeychainForWallet({
+          service: "walleterm-testnet",
+          network: "testnet",
+          channelsApiKey: "manual-key",
+          overwriteExisting: true,
+        }),
+      ).rejects.toThrow(/macOS keychain backend is only available on macOS/i);
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatform);
+      if (prevBin === undefined) delete process.env.WALLETERM_SECURITY_BIN;
+      else process.env.WALLETERM_SECURITY_BIN = prevBin;
+    }
+  });
+
+  it("errorMessage: runSecurity catch path surfaces stderr from a failing command", async () => {
+    const root = mkdtempSync(join(tmpdir(), "walleterm-keychain-errmsg-"));
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const securityBin = join(binDir, "security");
+
+    writeFileSync(
+      securityBin,
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "help") {
+  process.stderr.write("stderr-from-security");
+  process.exit(1);
+}
+process.exit(1);
+`,
+      "utf8",
+    );
+    chmodSync(securityBin, 0o755);
+
+    await expect(
+      setupMacOSKeychainForWallet({
+        securityBin,
+        service: "walleterm-testnet",
+        network: "testnet",
+        channelsApiKey: "manual-key",
+        overwriteExisting: true,
+      }),
+    ).rejects.toThrow(/stderr-from-security/);
+  });
+
+  it("errorMessage: runSecurity catch path falls back to Error.message when stderr is empty", async () => {
+    await expect(
+      setupMacOSKeychainForWallet({
+        securityBin: "/nonexistent/binary/path",
+        service: "walleterm-testnet",
+        network: "testnet",
+        channelsApiKey: "manual-key",
+        overwriteExisting: true,
+      }),
+    ).rejects.toThrow(/failed:/i);
+  });
+
+  it("networkDefaults: testnet config snippet contains testnet URLs", async () => {
+    const { securityBin, logPath } = makeSecurityBin();
+    process.env.WALLETERM_SECURITY_LOG_PATH = logPath;
+
+    const out = await setupMacOSKeychainForWallet({
+      securityBin,
+      service: "walleterm-testnet",
+      network: "testnet",
+      channelsApiKey: "manual-key",
+      overwriteExisting: true,
+    });
+
+    expect(out.config_snippet).toContain("https://channels.openzeppelin.com/testnet");
+    expect(out.config_snippet).toContain("https://soroban-rpc.testnet.stellar.gateway.fm");
+  });
+
+  it("networkDefaults: mainnet config snippet contains mainnet URLs", async () => {
+    const { securityBin, logPath } = makeSecurityBin();
+    process.env.WALLETERM_SECURITY_LOG_PATH = logPath;
+
+    const out = await setupMacOSKeychainForWallet({
+      securityBin,
+      service: "walleterm-mainnet",
+      network: "mainnet",
+      channelsApiKey: "manual-key",
+      overwriteExisting: true,
+    });
+
+    expect(out.config_snippet).toContain('https://channels.openzeppelin.com"');
+    expect(out.config_snippet).toContain("https://rpc.lightsail.network/");
+  });
+
+  it("networkDefaults: unknown network config snippet contains placeholder URLs", async () => {
+    const { securityBin, logPath } = makeSecurityBin();
+    process.env.WALLETERM_SECURITY_LOG_PATH = logPath;
+
+    const out = await setupMacOSKeychainForWallet({
+      securityBin,
+      service: "walleterm-custom",
+      network: "custom",
+      channelsApiKey: "manual-key",
+      overwriteExisting: true,
+    });
+
+    expect(out.config_snippet).toContain("<set-channels-base-url>");
+    expect(out.config_snippet).toContain("<set-rpc-url>");
+  });
+
+  it("resolveChannelsApiKey: auto-generates key for testnet", async () => {
+    const { securityBin, logPath } = makeSecurityBin();
+    process.env.WALLETERM_SECURITY_LOG_PATH = logPath;
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ apiKey: "auto-generated-testnet-key" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const out = await setupMacOSKeychainForWallet({
+      securityBin,
+      service: "walleterm-testnet",
+      network: "testnet",
+      overwriteExisting: true,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith("https://channels.openzeppelin.com/testnet/gen");
+    const log = readFileSync(logPath, "utf8").trim().split("\n");
+    const channelsEntry = log.find((l) => l.includes("channels_api_key"));
+    expect(channelsEntry).toContain("auto-generated-testnet-key");
+    expect(out).toBeDefined();
+  });
+
+  it("resolveChannelsApiKey: auto-generates key for mainnet", async () => {
+    const { securityBin, logPath } = makeSecurityBin();
+    process.env.WALLETERM_SECURITY_LOG_PATH = logPath;
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ apiKey: "auto-generated-mainnet-key" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const out = await setupMacOSKeychainForWallet({
+      securityBin,
+      service: "walleterm-mainnet",
+      network: "mainnet",
+      overwriteExisting: true,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith("https://channels.openzeppelin.com/gen");
+    const log = readFileSync(logPath, "utf8").trim().split("\n");
+    const channelsEntry = log.find((l) => l.includes("channels_api_key"));
+    expect(channelsEntry).toContain("auto-generated-mainnet-key");
+    expect(out).toBeDefined();
+  });
+
+  it("resolveChannelsApiKey: throws for unknown network without explicit key", async () => {
+    const { securityBin } = makeSecurityBin();
+
+    await expect(
+      setupMacOSKeychainForWallet({
+        securityBin,
+        service: "walleterm-custom",
+        network: "custom",
+        overwriteExisting: true,
+      }),
+    ).rejects.toThrow(/No default Channels API key generator for network 'custom'/);
+  });
 });

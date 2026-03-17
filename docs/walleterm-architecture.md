@@ -1,4 +1,4 @@
-# Walleterm v0 Architecture Draft
+# Walleterm Current Architecture
 
 ## Goal
 Build a CLI signer for OpenZeppelin Stellar multisig smart accounts (Ed25519 external signers + delegated signers) that:
@@ -6,7 +6,8 @@ Build a CLI signer for OpenZeppelin Stellar multisig smart accounts (Ed25519 ext
 - reviews what is being signed,
 - signs any signable payloads using keys resolved from a supported secret store,
 - outputs signed XDR,
-- optionally submits via OpenZeppelin Channels relayer.
+- optionally submits via OpenZeppelin Channels relayer or Stellar RPC,
+- optionally pays x402-protected HTTP endpoints with a Stellar keypair.
 
 ## Scope (v0)
 - Supported account model: OpenZeppelin smart account with:
@@ -21,12 +22,15 @@ Build a CLI signer for OpenZeppelin Stellar multisig smart accounts (Ed25519 ext
   - macOS keychain secret references resolved at runtime
 - Supported submit backends:
   - OpenZeppelin Channels hosted endpoints,
-  - optional self-hosted `relayer-plugin-channels` endpoint.
+  - optional self-hosted `relayer-plugin-channels` endpoint,
+  - direct Stellar RPC submission for signed transaction envelopes.
+- Supported payment backend:
+  - x402-protected HTTP endpoints using a Stellar payer keypair.
 
-## Non-Goals (v0)
+## Non-Goals
 - WebAuthn signing.
 - General wallet UX (balances/portfolio/swap).
-- Creating/modifying smart-account policies on-chain.
+- Full policy-management UX beyond wallet deployment and signer add/remove flows.
 
 ## Network Profiles
 Defaults:
@@ -40,23 +44,25 @@ Passphrases:
 Contract verification:
 - Expected smart-account WASM hash on both networks:
   - `a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e`
-- CLI verifies contract wasm hash before signing smart-account auth payloads.
+- `expected_wasm_hash` is validated in config and can drive `wallet create` when an account alias is selected, but full post-deploy/on-chain contract verification is still future work.
 
 ## CLI Commands
 - `walleterm review --network <name> --in <xdr_or_json_file> [--account <alias>]`
-  - Primary pre-sign flow. Decode the payload and show signability for the selected wallet.
+  - Primary pre-sign flow. Decode the payload, show signability for the selected wallet, and include signer reconciliation details when indexer lookup succeeds.
 - `walleterm sign --network <name> --in <xdr_or_json_file> --out <file> [--account <alias>] [--ttl-seconds <n>]`
-  - Main v0 flow. Signs all eligible payloads and writes signed output.
-- `walleterm submit --network <name> --in <signed_xdr_or_bundle> [--wait|--no-wait]`
-  - Optional relay submit path.
-- `walleterm wallet lookup --secret-ref <ref>` or `--account <alias>` or `--address <G...|C...>`
-  - Primary wallet discovery/introspection flow.
+  - Main signing flow. Signs all eligible payloads and writes signed output. When `strict_onchain = true`, this path first verifies configured delegated/external signers against on-chain indexer results.
+- `walleterm submit --network <name> --in <signed_xdr_or_bundle> [--mode channels|rpc]`
+  - Optional submit path. RPC mode supports signed tx envelopes only.
+- `walleterm pay <url>`
+  - Makes an HTTP request to an x402-protected endpoint using a configured Stellar payer.
+- `walleterm wallet lookup --secret-ref <ref>` or `--account <alias>` or `--address <G...|C...>` or `--contract-id <C...>`
+  - Wallet discovery and introspection flow.
 - `walleterm wallet signer generate`
   - Generates a Stellar signer keypair.
 - `walleterm wallet signer add|remove --account <alias> ...`
-  - Builds and signs signer-management bundles.
+  - Builds and signs signer-management bundles, with optional strict pre-mutation signer reconciliation.
 - `walleterm wallet create ...`
-  - Builds the deployment transaction for a new smart account.
+  - Builds the deployment transaction for a new smart account and can optionally submit it. It can also derive the WASM hash from account config.
 
 ## Input Formats
 - `TransactionEnvelope` base64 XDR text.
@@ -67,15 +73,16 @@ Contract verification:
 
 ## Output Formats
 - For transaction input: signed transaction envelope base64 XDR.
-- For auth-entry input: signed auth-entry base64 XDR.
-- For bundle input: JSON with signed `func/auth` or signed `xdr` depending on mode.
+- For auth-entry input: signed auth-entry base64 XDR, or JSON `{ auth: [...] }` if delegated signer expansion produces multiple auth entries.
+- For bundle input: JSON with signed `func/auth`.
 
 ## Signing Engine
 
 ### 1) Envelope signing
 Given transaction envelope XDR:
 - Parse network-specific tx hash preimage.
-- For each configured key that matches required account signature policy, append decorated signature.
+- Collect signing addresses from transaction and operation sources.
+- For each local key whose public key appears in those signing addresses, append a decorated signature.
 - Preserve existing signatures.
 
 ### 2) Auth-entry signing (generic address credentials)
@@ -95,6 +102,8 @@ For `SorobanAuthorizationEntry` where address is configured smart-account contra
   - `Signer::External(verifier_contract, signer_public_key_bytes)` => raw 64-byte Ed25519 signature over payload hash.
   - `Signer::Delegated(address)` => empty bytes marker.
 - Sort map entries deterministically by key XDR bytes.
+- If the signature map is empty, synthesize signer-map entries from locally configured smart-account signers.
+- In subset-style behavior, unknown signer entries are left untouched and only matching local signer entries are filled.
 - For each delegated signer, create an additional delegated auth entry for smart-account `__check_auth` and sign it with the delegated key.
 
 Contract behavior this aligns with:
@@ -104,21 +113,22 @@ Contract behavior this aligns with:
 - Delegated signer verification path uses `require_auth_for_args(payload)`.
 
 ## Review Pipeline
-`review` output should include:
-- envelope type, source account, sequence, fee, timebounds,
-- operation list,
-- per auth entry:
-  - credential type (`sourceAccount` or `address`),
-  - auth address,
-  - nonce,
-  - expiration ledger,
-  - invocation root summary,
-  - whether signable with current keyset,
-  - which configured signer(s) will sign.
-- smart-account checks:
-  - contract ID,
-  - on-chain wasm hash vs expected hash,
-  - configured signer set overlap.
+Current `review` output is compact JSON and includes:
+- input inspection:
+  - tx envelope type, operation count, auth-entry count, or
+  - auth-entry credential type, address, nonce, and expiration ledger
+- signability summary:
+  - matching envelope signer addresses
+  - count/details for signable auth entries
+- selected account alias and contract ID when an account can be resolved
+
+It does not currently emit the richer on-chain verification and transaction-detail view envisioned in earlier drafts.
+
+Current signer reconciliation output includes:
+- configured delegated/external signers from local config,
+- indexer-reported on-chain delegated/external signers,
+- missing/extra differences under `subset` or `exact` mode,
+- a non-fatal reconciliation error string when review cannot query the indexer.
 
 ## Credential Provider Integration
 Runtime secret resolution is provider-backed and ref-based.
@@ -127,15 +137,13 @@ Current supported providers:
 - 1Password via `op://...`
 - macOS keychain via `keychain://...`
 
-Two supported 1Password runtime patterns:
+Current 1Password runtime pattern:
 
 1) Direct `op read` resolution
 - Config stores secret refs like `op://vault/item/field`.
 - CLI resolves at runtime and keeps secrets in memory only.
 
-2) `op run` environment injection
-- Users launch CLI via `op run -- walleterm ...`.
-- CLI reads key material from env vars mapped in config.
+`op run -- ...` can still be used to launch the CLI itself, but there is no dedicated env-mapped signer-secret config mode today.
 
 macOS keychain runtime pattern:
 - Config stores refs like `keychain://walleterm-testnet/delegated_seed`.
@@ -150,6 +158,8 @@ Security constraints:
 - Prefer 1Password service accounts for automated non-interactive runs.
 - The current macOS keychain backend uses the system `security` CLI, which gives standard unlocked-keychain behavior rather than 1Password-style per-read approval prompts.
 - Keep provider setup/bootstrap commands separate from runtime resolution because write semantics vary by store.
+- Setup commands briefly expose secret values in process listings while invoking `op` or `security`.
+- Child processes receive a reduced environment rather than the full parent environment.
 
 ## Relayer Integration
 Default behavior:
@@ -167,12 +177,25 @@ Submission methods:
 
 ### Self-Hosted Channels Plugin Mode
 - Base URL = user relayer endpoint.
-- Optional `pluginId` and `adminSecret` for management API.
+- Optional `pluginId` for self-hosted plugin routing.
+
+### RPC submit mode
+- Direct Stellar RPC submission is supported for signed transaction envelopes only.
+- Signed `{func, auth[]}` bundles and standalone auth entries cannot be submitted through RPC mode.
+
+## x402 Payment Flow
+- `walleterm pay <url>` makes an HTTP request and retries after signing an x402 payment payload when the server responds with HTTP 402.
+- Payer selection comes from `--secret-ref` or `[x402].default_payer_secret_ref`.
+- `x402.max_payment_amount` sets a payment cap unless `--yes` is passed.
+- `--dry-run` returns the 402 challenge details without paying.
+- Current x402 network support is mapped from the standard Stellar testnet and mainnet passphrases only.
 
 ## Config Model (TOML)
 Top-level sections:
+- `[app]`
+  - `default_network`, `strict_onchain`, `onchain_signer_mode`, `default_ttl_seconds`, `assumed_ledger_time_seconds`, `default_submit_mode`
 - `[networks.<name>]`
-  - `rpc_url`, `network_passphrase`, `channels_base_url`, `channels_api_key_ref`
+  - `rpc_url`, `network_passphrase`, `indexer_url`, `channels_base_url`, `channels_api_key_ref`, `deployer_secret_ref`, `x402_facilitator_url`
 - `[smart_accounts.<alias>]`
   - `network`, `contract_id`, `expected_wasm_hash`
 - `[[smart_accounts.<alias>.delegated_signers]]`
@@ -186,14 +209,18 @@ Top-level sections:
   - `public_key_hex` (32-byte Ed25519 pubkey)
   - `secret_ref` (provider-backed secret reference)
   - `enabled`
+- `[x402]`
+  - `default_payer_secret_ref`, `max_payment_amount`
 
 Validation rules:
 - All signer public keys unique within an account.
 - Secret-derived pubkey must equal configured `public_key_hex`.
 - All signer secrets must be valid Stellar seeds (`S...`).
-- Signer match policy: `subset` in v0:
-  - Config signer set may be a subset of on-chain signers.
-  - Tool signs only entries it can satisfy and reports skipped entries.
+- Config loader validates enum/numeric fields and warns on non-HTTPS remote RPC/indexer/Channels URLs.
+- `strict_onchain` and `onchain_signer_mode` are enforced today for `sign` and `wallet signer add/remove` by reconciling configured signers against indexer-reported on-chain signers.
+- `default_submit_mode = channels` is enforced today for `wallet create` by auto-submitting through Channels.
+- `expected_wasm_hash` is validated and can be consumed by `wallet create`, but broader on-chain contract verification remains future work.
+- `x402_facilitator_url` is still config-only and not wired into the current x402 client runtime.
 
 ## Expiration Policy
 - Default auth TTL: 30 seconds.
@@ -204,19 +231,11 @@ Validation rules:
 ## Error Model
 Classes:
 - Parse errors: invalid base64/XDR, unsupported envelope types.
-- Signability errors: no matching key, network mismatch, wasm hash mismatch.
-- Policy errors: signer configured but not allowed by on-chain smart-account state.
+- Signability errors: no matching key, network mismatch, unsupported signer-map shape.
+- Policy errors: signer configured but not resolvable from local configuration.
 - Submit errors: relayer transport/execution errors, timeout, on-chain failure.
+- Payment errors: unsupported passphrase-to-x402 mapping, max-payment cap exceeded, malformed x402 challenge.
 
-## Suggested Implementation Order
-1. Project bootstrap + config loader + network profile validation.
-2. XDR parser + review command.
-3. 1Password resolver + key verification.
-4. Envelope signing.
-5. Generic auth-entry signing.
-6. OZ smart-account signature-map signing.
-7. Submit command with channels hosted mode.
-8. Self-hosted plugin mode and management helpers.
-
-## Resolved Decisions
-1. Signer matching mode is `subset` for v0.
+## Notes
+- The Smart Account Kit deployer is intentionally deterministic and public. It should never hold meaningful balances.
+- Setup commands store delegated signer and Channels API key material by default; external signer seeds are provisioned separately.

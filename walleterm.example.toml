@@ -19,10 +19,13 @@
 # Required: default network name.
 default_network = "testnet"
 
-# Optional (default true): enforce strict on-chain checks.
+# Optional (default true): enforce signer reconciliation before `sign` and
+# `wallet signer add/remove`.
 strict_onchain = true
 
 # Optional (default "subset"): subset | exact
+# subset = configured delegated/external signers must all exist on-chain.
+# exact = also reject extra on-chain delegated/external signers not in config.
 onchain_signer_mode = "subset"
 
 # Optional (default 30): auth signature ttl in seconds.
@@ -32,6 +35,7 @@ default_ttl_seconds = 30
 assumed_ledger_time_seconds = 6
 
 # Optional (default "sign-only"): sign-only | channels
+# `channels` makes `wallet create` auto-submit through Channels.
 default_submit_mode = "sign-only"
 
 [networks.testnet]
@@ -52,7 +56,7 @@ channels_api_key_ref = "op://Private/walleterm-testnet/channels_api_key"
 # deployer_secret_ref = "op://Private/walleterm-testnet/deployer_seed"
 # deployer_secret_ref = "keychain://walleterm-testnet/deployer_seed"
 
-# Optional: override x402 facilitator URL for this network.
+# Optional: parsed and warned on if insecure, but currently unused by the CLI.
 # x402_facilitator_url = "https://x402-facilitator.example.com"
 
 [networks.mainnet]
@@ -76,19 +80,24 @@ channels_api_key_ref = "op://Private/walleterm-mainnet/channels_api_key"
 # Optional: default payer keypair secret ref for `walleterm pay` commands.
 # default_payer_secret_ref = "op://Private/walleterm-testnet/payer_seed"
 # default_payer_secret_ref = "keychain://walleterm-testnet/payer_seed"
+# Optional: abort `walleterm pay` if the requested amount exceeds this cap,
+# unless `--yes` is passed.
+# max_payment_amount = "0.50"
 
 # -------------------------------------------------------------
 # Smart account aliases
 # -------------------------------------------------------------
 
 [smart_accounts.treasury_testnet]
+# Alias names are arbitrary; choose names that fit your environment.
 # Required: must match a [networks.<name>] key.
 network = "testnet"
 
 # Required: OZ smart account contract address.
 contract_id = "CTODOCHANGE1234567890"
 
-# Optional but recommended: expected account contract wasm hash.
+# Optional but recommended: validated as 32-byte hex. `wallet create --account`
+# can use this when `--wasm-hash` is omitted.
 expected_wasm_hash = "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e"
 
 # Delegated signers (repeatable)
@@ -113,6 +122,8 @@ enabled = true
 name = "ops_1"
 verifier_contract_id = "CTODOED25519VERIFIER"
 public_key_hex = "3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29"
+# Setup commands do not create external signer seed fields automatically.
+# Provision this ref yourself in 1Password or the macOS keychain.
 secret_ref = "op://Private/walleterm-testnet/external_ops_1_seed"
 enabled = true
 
@@ -120,6 +131,8 @@ enabled = true
 name = "ops_2"
 verifier_contract_id = "CTODOED25519VERIFIER"
 public_key_hex = "4cb5abf6ad79fbf5abbccafcc269d85cd2651ed4b885b5869f241aedf0a5ba29"
+# Setup commands do not create external signer seed fields automatically.
+# Provision this ref yourself in 1Password or the macOS keychain.
 secret_ref = "op://Private/walleterm-testnet/external_ops_2_seed"
 enabled = true
 
@@ -138,6 +151,8 @@ enabled = true
 name = "ops_1"
 verifier_contract_id = "CTODOED25519VERIFIER"
 public_key_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+# Setup commands do not create external signer seed fields automatically.
+# Provision this ref yourself in 1Password or the macOS keychain.
 secret_ref = "op://Private/walleterm-mainnet/external_ops_1_seed"
 enabled = true
 

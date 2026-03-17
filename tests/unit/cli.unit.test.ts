@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Keypair, Networks, StrKey } from "@stellar/stellar-sdk";
 import { Command } from "commander";
 
-const mocks = vi.hoisted(() => ({
+const mocks = {
   mockCanSignInput: vi.fn(),
   mockComputeExpirationLedger: vi.fn(),
   mockInspectInput: vi.fn(),
@@ -28,10 +28,11 @@ const mocks = vi.hoisted(() => ({
   mockListContractSigners: vi.fn(),
   mockMakeDelegatedSignerScVal: vi.fn(),
   mockMakeExternalSignerScVal: vi.fn(),
+  mockReconcileContractSigners: vi.fn(),
   mockResolveIndexerUrl: vi.fn(),
   mockSmartAccountKitDeployerKeypair: vi.fn(),
   mockSecretResolve: vi.fn(),
-}));
+};
 
 const {
   mockCanSignInput,
@@ -58,6 +59,7 @@ const {
   mockListContractSigners,
   mockMakeDelegatedSignerScVal,
   mockMakeExternalSignerScVal,
+  mockReconcileContractSigners,
   mockResolveIndexerUrl,
   mockSmartAccountKitDeployerKeypair,
   mockSecretResolve,
@@ -104,6 +106,7 @@ vi.mock("../../src/wallet.js", () => ({
   listContractSigners: mocks.mockListContractSigners,
   makeDelegatedSignerScVal: mocks.mockMakeDelegatedSignerScVal,
   makeExternalSignerScVal: mocks.mockMakeExternalSignerScVal,
+  reconcileContractSigners: mocks.mockReconcileContractSigners,
   resolveIndexerUrl: mocks.mockResolveIndexerUrl,
   smartAccountKitDeployerKeypair: mocks.mockSmartAccountKitDeployerKeypair,
 }));
@@ -113,6 +116,7 @@ vi.mock("../../src/secrets.js", () => {
     async resolve(ref: string): Promise<string> {
       return mocks.mockSecretResolve(ref);
     }
+    clearCache(): void {}
   }
   return { SecretResolver };
 });
@@ -173,8 +177,11 @@ beforeEach(() => {
   mockLoadConfig.mockReturnValue({
     app: {
       default_network: "testnet",
+      strict_onchain: true,
+      onchain_signer_mode: "subset",
       default_ttl_seconds: 30,
       assumed_ledger_time_seconds: 6,
+      default_submit_mode: "sign-only",
     },
     networks: {
       testnet: {
@@ -268,6 +275,14 @@ beforeEach(() => {
   mockDiscoverContractsByCredentialId.mockResolvedValue({ count: 0, contracts: [] });
   mockDiscoverContractsByAddress.mockResolvedValue({ count: 0, contracts: [] });
   mockListContractSigners.mockResolvedValue({ contractId: CONTRACT_ID, signers: [] });
+  mockReconcileContractSigners.mockReturnValue({
+    mode: "subset",
+    ok: true,
+    configured: { delegated: [], external: [] },
+    onchain: { delegated: [], external: [] },
+    missing: { delegated: [], external: [] },
+    extra: { delegated: [], external: [] },
+  });
   mockCreateWalletDeployTx.mockResolvedValue({
     contractId: CONTRACT_ID,
     txXdr: "AAAA",
@@ -291,6 +306,20 @@ describe("cli unit", () => {
       signability: { kind: "bundle", signableAuthEntries: 2 },
       account: "treasury",
       contract_id: CONTRACT_ID,
+      signer_reconciliation: expect.objectContaining({ ok: true, mode: "subset" }),
+      signer_reconciliation_error: null,
+    });
+  });
+
+  it("review surfaces signer reconciliation lookup failures without failing the command", async () => {
+    mockResolveIndexerUrl.mockImplementationOnce(() => {
+      throw new Error("missing indexer");
+    });
+
+    const res = await run(["review", "--in", "in.txt", "--account", "treasury"]);
+    expect(JSON.parse(res.stdout)).toMatchObject({
+      signer_reconciliation: null,
+      signer_reconciliation_error: "missing indexer",
     });
   });
 
@@ -319,6 +348,21 @@ describe("cli unit", () => {
     await expect(
       run(["sign", "--in", "in.txt", "--out", "out.txt", "--ttl-seconds", "30"]),
     ).rejects.toThrow(/No smart account selected/i);
+  });
+
+  it("sign command fails when strict onchain reconciliation fails", async () => {
+    mockReconcileContractSigners.mockReturnValueOnce({
+      mode: "exact",
+      ok: false,
+      configured: { delegated: ["GA"], external: [] },
+      onchain: { delegated: [], external: [] },
+      missing: { delegated: ["GA"], external: [] },
+      extra: { delegated: [], external: [] },
+    });
+
+    await expect(run(["sign", "--in", "in.txt", "--out", "out.txt"])).rejects.toThrow(
+      /Strict on-chain signer reconciliation failed/i,
+    );
   });
 
   it("sign rejects invalid integer flags", async () => {
@@ -1135,6 +1179,132 @@ describe("cli unit", () => {
 
     expect(mockMakeExternalSignerScVal).toHaveBeenCalledTimes(1);
     expect(mockSubmitViaChannels).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(out.stdout)).toMatchObject({ submitted: true });
+  });
+
+  it("wallet create uses expected_wasm_hash from selected account when --wasm-hash is omitted", async () => {
+    mockLoadConfig.mockReturnValue({
+      app: {
+        default_network: "testnet",
+        strict_onchain: true,
+        onchain_signer_mode: "subset",
+        default_ttl_seconds: 30,
+        assumed_ledger_time_seconds: 6,
+        default_submit_mode: "sign-only",
+      },
+      networks: {
+        testnet: {
+          rpc_url: "https://rpc.invalid",
+          network_passphrase: Networks.TESTNET,
+        },
+      },
+      smart_accounts: {
+        treasury: {
+          network: "testnet",
+          contract_id: CONTRACT_ID,
+          expected_wasm_hash: WASM_HASH,
+          external_signers: [],
+          delegated_signers: [],
+        },
+      },
+    });
+
+    await run([
+      "wallet",
+      "create",
+      "--account",
+      "treasury",
+      "--delegated-address",
+      Keypair.random().publicKey(),
+      "--out",
+      "out.xdr",
+    ]);
+
+    expect(mockCreateWalletDeployTx).toHaveBeenCalledWith(
+      expect.objectContaining({ wasmHashHex: WASM_HASH }),
+    );
+  });
+
+  it("wallet create rejects mismatched expected_wasm_hash and auto-submits when default_submit_mode is channels", async () => {
+    mockLoadConfig.mockReturnValue({
+      app: {
+        default_network: "testnet",
+        strict_onchain: true,
+        onchain_signer_mode: "subset",
+        default_ttl_seconds: 30,
+        assumed_ledger_time_seconds: 6,
+        default_submit_mode: "channels",
+      },
+      networks: {
+        testnet: {
+          rpc_url: "https://rpc.invalid",
+          network_passphrase: Networks.TESTNET,
+        },
+      },
+      smart_accounts: {
+        treasury: {
+          network: "testnet",
+          contract_id: CONTRACT_ID,
+          expected_wasm_hash: "11".repeat(32),
+          external_signers: [],
+          delegated_signers: [],
+        },
+      },
+    });
+
+    await expect(
+      run([
+        "wallet",
+        "create",
+        "--account",
+        "treasury",
+        "--wasm-hash",
+        WASM_HASH,
+        "--delegated-address",
+        Keypair.random().publicKey(),
+        "--out",
+        "out.xdr",
+      ]),
+    ).rejects.toThrow(/wasm hash mismatch/i);
+
+    mockLoadConfig.mockReturnValue({
+      app: {
+        default_network: "testnet",
+        strict_onchain: true,
+        onchain_signer_mode: "subset",
+        default_ttl_seconds: 30,
+        assumed_ledger_time_seconds: 6,
+        default_submit_mode: "channels",
+      },
+      networks: {
+        testnet: {
+          rpc_url: "https://rpc.invalid",
+          network_passphrase: Networks.TESTNET,
+        },
+      },
+      smart_accounts: {
+        treasury: {
+          network: "testnet",
+          contract_id: CONTRACT_ID,
+          expected_wasm_hash: WASM_HASH,
+          external_signers: [],
+          delegated_signers: [],
+        },
+      },
+    });
+
+    const out = await run([
+      "wallet",
+      "create",
+      "--account",
+      "treasury",
+      "--delegated-address",
+      Keypair.random().publicKey(),
+      "--out",
+      "out.xdr",
+    ]);
+
+    expect(mockSubmitViaChannels).toHaveBeenCalled();
     expect(JSON.parse(out.stdout)).toMatchObject({ submitted: true });
   });
 });

@@ -17,12 +17,8 @@ At runtime, each provider implements:
 - `scheme`: the URI scheme it owns, such as `op` or `keychain`
 - `resolve(ref)`: return the secret value for that reference
 
-`walleterm` itself only understands:
-
-- direct values
-- provider-backed secret refs
-
-Everything else is provider-specific.
+For signer seed resolution, `walleterm` expects provider-backed secret refs such as `op://...` and `keychain://...`.
+Direct literal values are only supported in a few non-signer paths such as Channels API key resolution.
 
 ## Current providers
 
@@ -32,6 +28,9 @@ Everything else is provider-specific.
 - Example: `op://Private/walleterm-testnet/delegated_seed`
 - Runtime behavior: shell out to `op read <ref>`
 - Setup flow: `walleterm setup op`
+- Default setup naming: vault `Private`, item `walleterm-testnet` or `walleterm-mainnet`
+- Setup stores `delegated_seed` and `channels_api_key` by default, plus optional `deployer_seed`
+- Setup-time warning: secret values are briefly visible in process listings because the `op` CLI receives them as arguments
 
 ### macOS keychain
 
@@ -41,6 +40,9 @@ Everything else is provider-specific.
   - `keychain://walleterm-testnet/delegated_seed?keychain=%2FUsers%2Fme%2FLibrary%2FKeychains%2Flogin.keychain-db`
 - Runtime behavior: shell out to `security find-generic-password -a <account> -s <service> -w`
 - Setup flow: `walleterm setup keychain`
+- Default setup naming: service `walleterm-testnet` or `walleterm-mainnet`
+- Setup stores `delegated_seed` and `channels_api_key` by default, plus optional `deployer_seed`
+- Setup-time warning: secret values are briefly visible in process listings because the `security` CLI requires `-w <value>`
 
 For the macOS keychain provider:
 
@@ -52,6 +54,17 @@ Current backend notes:
 - Silent reads are expected. The macOS keychain normally allows the creating app to read its own items without prompting once the keychain is unlocked.
 - The current backend uses the system `security` CLI, so this is best understood as OS-native encrypted storage for a user-session CLI, not as a 1Password-style approval workflow.
 - If Walleterm ever needs stricter app-scoped ACLs or biometric/user-presence gates, that would require moving from the `security` CLI to a native Keychain Services integration.
+
+## Subprocess environment filtering
+
+When `walleterm` shells out to `op` or `security`, it passes a reduced environment instead of the full parent process environment.
+
+Current allowlist includes:
+- base shell/runtime variables such as `PATH`, `HOME`, `USER`, `TMPDIR`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`
+- `OP_*` variables needed for 1Password flows
+- `WALLETERM_*` variables used by tests and local overrides
+
+This reduces accidental exposure of unrelated credentials to provider subprocesses.
 
 ## Why the abstraction is ref-based
 

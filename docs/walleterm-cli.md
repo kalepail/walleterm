@@ -70,6 +70,7 @@ If you want the smallest useful command set, start with:
 - `review`
 - `sign`
 - `submit`
+- `pay`
 
 ### Review and signing flow
 
@@ -109,6 +110,48 @@ bun src/cli.ts submit \
   --channels-api-key <api-key>
 ```
 
+Notes:
+- `--plugin-id` is available for self-hosted Channels / relayer deployments.
+- RPC mode only accepts signed transaction envelope XDR.
+- Channels mode accepts signed transaction envelope XDR or signed `{func, auth[]}` bundle JSON.
+- Submitting a standalone auth entry is not supported.
+
+### x402 payment flow
+
+Call an x402-protected endpoint and pay from a Stellar keypair:
+
+```bash
+bun src/cli.ts pay \
+  https://api.example.com/resource \
+  --config ./walleterm.toml \
+  --network testnet \
+  --secret-ref keychain://walleterm-testnet/payer_seed \
+  --format json
+```
+
+Use config-driven payer selection instead of `--secret-ref`:
+
+```toml
+[x402]
+default_payer_secret_ref = "keychain://walleterm-testnet/payer_seed"
+max_payment_amount = "0.50"
+```
+
+Request options:
+- `--method <method>`: HTTP method (default `GET`)
+- `--header "Name: Value"`: repeatable header option
+- `--data <body>`: request body
+- `--format body|json`: raw response body to stdout or JSON metadata output
+- `--out <path>`: write the raw response body to a file and print a JSON summary
+- `--dry-run`: inspect the 402 challenge without paying
+- `--yes`: bypass `x402.max_payment_amount`
+
+Behavior notes:
+- If `x402.max_payment_amount` is set, `pay` aborts when the requested amount exceeds that cap unless `--yes` is passed.
+- `--format json` includes `payment_required`, `payment_payload`, `settlement`, and `settlement_error` fields.
+- `--out` takes precedence over `--format json`; it writes the raw body to disk and prints a smaller JSON summary.
+- x402 payment network mapping currently supports the standard Stellar testnet and mainnet passphrases only.
+
 ### 1Password bootstrap wizard
 
 Bootstrap 1Password secrets for wallet create/sign flows:
@@ -132,6 +175,9 @@ The command will:
 - use smart-account-kit deterministic deployer by default
 - generate delegated key if not provided
 - auto-generate Channels API key for `testnet` and `mainnet` if not provided
+
+Operational note:
+- Secret values are briefly visible in process listings during storage. Avoid running setup flows on shared machines or CI runners you do not trust.
 
 Optional: store a deployer seed in 1Password (not required in default mode):
 
@@ -177,6 +223,9 @@ The command will:
 - generate delegated key if not provided
 - auto-generate Channels API key for `testnet` and `mainnet` if not provided
 
+Operational note:
+- Secret values are briefly visible in process listings during storage. Avoid running setup flows on shared machines or CI runners you do not trust.
+
 Optional: store deployer seed in the keychain:
 
 ```bash
@@ -209,13 +258,20 @@ bun src/cli.ts wallet lookup \
   --secret-ref keychain://walleterm-testnet/delegated_seed
 ```
 
+Pass exactly one selector: `--account`, `--address`, `--contract-id`, or `--secret-ref`.
+
 Other lookup modes:
 
 ```bash
 bun src/cli.ts wallet lookup --config ./walleterm.toml --network testnet --account treasury
 bun src/cli.ts wallet lookup --config ./walleterm.toml --network testnet --address G...
 bun src/cli.ts wallet lookup --config ./walleterm.toml --network testnet --address C...
+bun src/cli.ts wallet lookup --config ./walleterm.toml --network testnet --contract-id C...
 ```
+
+Notes:
+- `--indexer-url <url>` overrides the configured/default indexer.
+- `--secret-ref` lookup derives both the public address and credential ID, then searches delegated and external signer matches.
 
 ### Signer management
 
@@ -244,6 +300,25 @@ bun src/cli.ts wallet signer add \
   --out ./add-external.bundle.json
 ```
 
+Add a delegated signer directly from its public address:
+
+```bash
+bun src/cli.ts wallet signer add \
+  --config ./walleterm.toml --network testnet --account treasury \
+  --delegated-address G... \
+  --out ./add-delegated.bundle.json
+```
+
+Add an external Ed25519 signer directly from verifier + public key:
+
+```bash
+bun src/cli.ts wallet signer add \
+  --config ./walleterm.toml --network testnet --account treasury \
+  --verifier-contract-id CVERIFIER... \
+  --public-key-hex <32-byte-ed25519-pubkey-hex> \
+  --out ./add-external.bundle.json
+```
+
 Remove signer:
 
 ```bash
@@ -252,6 +327,12 @@ bun src/cli.ts wallet signer remove \
   --secret-ref op://Private/walleterm-testnet/delegated_seed \
   --out ./remove-signer.bundle.json
 ```
+
+Notes:
+- Pass one signer target using `--secret-ref`, `--delegated-address`, or `--verifier-contract-id` with `--public-key-hex`.
+- `--context-rule-id` defaults to `0`.
+- `--ttl-seconds` and `--latest-ledger` apply to signer-mutation bundles too.
+- If `app.strict_onchain = true`, signer add/remove fails when configured delegated/external signers do not reconcile with indexer-reported on-chain signers for that account.
 
 ### Create/deploy a new wallet
 
@@ -291,11 +372,18 @@ bun src/cli.ts wallet create \
 
 Notes:
 - `--delegated-address` and `--external-ed25519 verifier:pubkeyhex` are repeatable.
+- At least one initial signer is required.
+- `--account <alias>` lets `wallet create` use `smart_accounts.<alias>.expected_wasm_hash` from config when `--wasm-hash` is omitted.
+- If both `--wasm-hash` and configured `expected_wasm_hash` are present, they must match.
 - Default deployer is smart-account-kit deterministic deployer.
+- That deployer is intentionally deterministic and public; it must not hold meaningful balances.
 - If `networks.<name>.deployer_secret_ref` is set in config, `wallet create` uses that seed by default.
 - Default wallet-create tx timeout is 60s (Channels-compatible).
 - `--deployer-secret-ref` is an override; it cannot be combined with `--kit-raw-id`.
 - `--kit-raw-id` uses smart-account-kit deterministic deployer and `salt = sha256(raw-id)`.
+- `--kit-raw-id` cannot be combined with `--salt-hex`.
+- If `app.default_submit_mode = "channels"`, `wallet create` auto-submits through Channels even without `--submit`.
+- `--sequence` and `--fee` are available for advanced/manual transaction construction.
 - `--skip-prepare` is available for offline/dry flows.
 - Command prints derived `contract_id` in stdout JSON.
 
@@ -315,6 +403,8 @@ channels_api_key_ref = "op://vault/oz-relayer/testnet_api_key"
 
 Then `submit` or `wallet create --submit` can omit `--channels-*` flags.
 `wallet create` will also automatically use `deployer_secret_ref` when present.
+
+Config validation warns on non-HTTPS `rpc_url`, `indexer_url`, and `channels_base_url` values unless they target `localhost` or `127.0.0.1`.
 
 The same network config can use the macOS keychain instead:
 

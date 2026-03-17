@@ -233,6 +233,14 @@ describe("core unit", () => {
     );
   });
 
+  it("parseInputFile falls through to JSON parsing when valid base64 decodes to invalid XDR", () => {
+    // Valid base64 that decodes to garbage bytes — not valid XDR for TransactionEnvelope
+    // or SorobanAuthorizationEntry. The function should fail at JSON.parse and throw a
+    // clear "neither base64 XDR nor JSON" error since it is not valid JSON either.
+    const garbageBase64 = Buffer.from("this is not XDR at all!").toString("base64");
+    expect(() => parseInputFile(tempFile(garbageBase64))).toThrow(/neither base64 XDR nor JSON/i);
+  });
+
   it("parseInputFile accepts tx/auth xdr forms and bundle json", () => {
     const delegated = Keypair.random().publicKey();
     const authEntry = makeAddressEntry(delegated);
@@ -1154,7 +1162,11 @@ describe("core unit", () => {
       ),
     ).toBe(105);
 
-    vi.spyOn(rpc.Server.prototype, "getLatestLedger").mockResolvedValue({ sequence: 200 } as never);
+    vi.spyOn(rpc.Server.prototype, "getLatestLedger").mockResolvedValue({
+      id: "mock-ledger-id",
+      sequence: 200,
+      protocolVersion: "22",
+    });
     expect(
       await computeExpirationLedger(
         { rpc_url: "https://rpc.invalid", network_passphrase: PASS },

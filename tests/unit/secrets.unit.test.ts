@@ -33,7 +33,7 @@ describe("secrets unit", () => {
     const { opBin } = makeOpScript(`#!/usr/bin/env node
 const fs = require("node:fs");
 const ref = process.argv[3];
-const countPath = process.env.COUNT_PATH;
+const countPath = process.env.WALLETERM_COUNT_PATH;
 const n = Number(fs.readFileSync(countPath, "utf8"));
 fs.writeFileSync(countPath, String(n + 1), "utf8");
 if (process.argv[2] === "read" && ref === "op://vault/item/field") {
@@ -43,12 +43,12 @@ if (process.argv[2] === "read" && ref === "op://vault/item/field") {
 process.exit(1);
 `);
 
-    process.env.COUNT_PATH = countPath;
+    process.env.WALLETERM_COUNT_PATH = countPath;
     const resolver = new SecretResolver(opBin);
     expect(await resolver.resolve("op://vault/item/field")).toBe("secret-value");
     expect(await resolver.resolve("op://vault/item/field")).toBe("secret-value");
     expect(readFileSync(countPath, "utf8").trim()).toBe("1");
-    delete process.env.COUNT_PATH;
+    delete process.env.WALLETERM_COUNT_PATH;
   });
 
   it("rejects non-op refs", async () => {
@@ -119,7 +119,7 @@ process.exit(1);
     const { securityBin } = makeSecurityScript(`#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-const countPath = process.env.COUNT_PATH;
+const countPath = process.env.WALLETERM_COUNT_PATH;
 const n = Number(fs.readFileSync(countPath, "utf8"));
 fs.writeFileSync(countPath, String(n + 1), "utf8");
 if (
@@ -137,13 +137,13 @@ process.stderr.write(args.join(" "));
 process.exit(1);
 `);
 
-    process.env.COUNT_PATH = countPath;
+    process.env.WALLETERM_COUNT_PATH = countPath;
     const resolver = new SecretResolver({ securityBin });
     const ref = "keychain://walleterm-testnet/delegated_seed";
     expect(await resolver.resolve(ref)).toBe("seed-from-keychain");
     expect(await resolver.resolve(ref)).toBe("seed-from-keychain");
     expect(readFileSync(countPath, "utf8").trim()).toBe("1");
-    delete process.env.COUNT_PATH;
+    delete process.env.WALLETERM_COUNT_PATH;
   });
 
   it("parses and formats keychain refs with optional keychain path", () => {
@@ -161,5 +161,107 @@ process.exit(1);
       account: "delegated_seed",
       keychain: "/Users/example/Library/Keychains/login.keychain-db",
     });
+  });
+
+  it("canUseMacOSKeychain returns false on non-macOS without explicit securityBin", () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      const resolver = new SecretResolver({});
+      expect(resolver.isSupportedRef("keychain://svc/acct")).toBe(false);
+      expect(resolver.supportedSchemes()).toEqual(["op"]);
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
+  it("MacOSKeychainSecretProvider.resolve with custom keychain path appends it to args", async () => {
+    const { securityBin } = makeSecurityScript(`#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (
+  args[0] === "find-generic-password" &&
+  args[1] === "-a" &&
+  args[2] === "delegated_seed" &&
+  args[3] === "-s" &&
+  args[4] === "walleterm-testnet" &&
+  args[5] === "-w" &&
+  args[6] === "/custom/keychain.db"
+) {
+  process.stdout.write("secret-from-custom-keychain");
+  process.exit(0);
+}
+process.stderr.write("unexpected args: " + args.join(" "));
+process.exit(1);
+`);
+
+    const resolver = new SecretResolver({ securityBin });
+    const ref = buildKeychainSecretRef(
+      "walleterm-testnet",
+      "delegated_seed",
+      "/custom/keychain.db",
+    );
+    expect(await resolver.resolve(ref)).toBe("secret-from-custom-keychain");
+  });
+
+  it("MacOSKeychainSecretProvider.resolve surfaces exec failure", async () => {
+    const { securityBin } = makeSecurityScript(`#!/usr/bin/env node
+process.stderr.write("keychain-boom");
+process.exit(1);
+`);
+
+    const resolver = new SecretResolver({ securityBin });
+    await expect(resolver.resolve("keychain://walleterm-testnet/delegated_seed")).rejects.toThrow(
+      /Failed resolving macOS keychain ref/i,
+    );
+  });
+
+  it("MacOSKeychainSecretProvider.resolve rejects empty value", async () => {
+    const { securityBin } = makeSecurityScript(`#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "find-generic-password") {
+  process.stdout.write("   ");
+  process.exit(0);
+}
+process.exit(1);
+`);
+
+    const resolver = new SecretResolver({ securityBin });
+    await expect(resolver.resolve("keychain://walleterm-testnet/delegated_seed")).rejects.toThrow(
+      /empty value/i,
+    );
+  });
+
+  it("SecretResolver.resolve rejects bare string without scheme", async () => {
+    const resolver = new SecretResolver("op");
+    await expect(resolver.resolve("just-a-string")).rejects.toThrow(
+      /Unsupported secret_ref 'just-a-string'\. Expected a provider ref like/,
+    );
+  });
+
+  it("clearCache causes a second resolve to call the provider again", async () => {
+    const countPath = join(mkdtempSync(join(tmpdir(), "walleterm-secrets-clear-")), "count.txt");
+    writeFileSync(countPath, "0", "utf8");
+    const { opBin } = makeOpScript(`#!/usr/bin/env node
+const fs = require("node:fs");
+const ref = process.argv[3];
+const countPath = process.env.WALLETERM_COUNT_PATH;
+const n = Number(fs.readFileSync(countPath, "utf8"));
+fs.writeFileSync(countPath, String(n + 1), "utf8");
+if (process.argv[2] === "read" && ref === "op://vault/item/field") {
+  process.stdout.write("secret-value");
+  process.exit(0);
+}
+process.exit(1);
+`);
+
+    process.env.WALLETERM_COUNT_PATH = countPath;
+    const resolver = new SecretResolver(opBin);
+    expect(await resolver.resolve("op://vault/item/field")).toBe("secret-value");
+    expect(readFileSync(countPath, "utf8").trim()).toBe("1");
+
+    resolver.clearCache();
+    expect(await resolver.resolve("op://vault/item/field")).toBe("secret-value");
+    expect(readFileSync(countPath, "utf8").trim()).toBe("2");
+    delete process.env.WALLETERM_COUNT_PATH;
   });
 });

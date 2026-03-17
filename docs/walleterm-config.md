@@ -1,6 +1,6 @@
 # Walleterm TOML Config Reference
 
-This document defines every supported `walleterm.toml` setting.
+This document covers the current user-facing `walleterm.toml` settings and notes where behavior is enforced at runtime.
 
 Canonical schema is implemented in:
 - `src/config.ts`
@@ -26,11 +26,11 @@ default_submit_mode = "sign-only"
 
 Fields:
 - `default_network` (required): Name of network key under `[networks.<name>]`.
-- `strict_onchain` (optional, default `true`): Enforce on-chain signer and account checks.
-- `onchain_signer_mode` (optional, default `subset`): `subset` or `exact`.
+- `strict_onchain` (optional, default `true`): When enabled, `sign` and `wallet signer add/remove` fail if configured signers do not reconcile against current indexer-reported on-chain signers for the selected account.
+- `onchain_signer_mode` (optional, default `subset`): `subset` or `exact`. Controls signer reconciliation behavior. `subset` requires all enabled configured signers to exist on-chain. `exact` also rejects extra on-chain delegated/external signers not present in config.
 - `default_ttl_seconds` (optional, default `30`): Used when signing auth entries.
 - `assumed_ledger_time_seconds` (optional, default `6`): Ledger-time estimate for TTL to ledger conversion.
-- `default_submit_mode` (optional, default `sign-only`): Preferred workflow mode (`sign-only` or `channels`).
+- `default_submit_mode` (optional, default `sign-only`): Preferred `wallet create` behavior. `sign-only` writes the deployment transaction only. `channels` also auto-submits the created deployment transaction through Channels unless overridden by CLI flags.
 
 ## 2) networks section
 
@@ -55,6 +55,11 @@ Fields:
   - provider-backed secret ref like `op://...` or `keychain://...`, or
   - direct API key string.
 - `deployer_secret_ref` (optional): `wallet create` override source. If omitted, CLI uses the smart-account-kit deterministic deployer.
+- `x402_facilitator_url` (optional): Parsed and validated for forward compatibility, but currently unused by the CLI runtime.
+
+Notes:
+- Config validation warns on non-HTTPS `rpc_url`, `indexer_url`, `channels_base_url`, and `x402_facilitator_url` values unless they target `localhost` or `127.0.0.1`.
+- The default smart-account-kit deployer is intentionally deterministic and public. It should never hold meaningful balances.
 
 ## 3) smart_accounts section
 
@@ -70,7 +75,7 @@ expected_wasm_hash = "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec7
 Fields:
 - `network` (required): Must match a configured `[networks.<name>]` key.
 - `contract_id` (required): Smart account contract address (`C...`).
-- `expected_wasm_hash` (optional but recommended): Enforces expected contract wasm hash during strict checks.
+- `expected_wasm_hash` (optional but recommended): Validated as a 32-byte hex string. `wallet create` can use this as the default WASM hash when `--account <alias>` is passed and `--wasm-hash` is omitted. If both are provided, they must match.
 
 ### delegated_signers
 
@@ -121,7 +126,26 @@ network_passphrase = "Test SDF Network ; September 2015"
 [smart_accounts]
 ```
 
-## 5) Practical Notes
+## 5) x402 section
+
+Optional settings for `walleterm pay`:
+
+```toml
+[x402]
+default_payer_secret_ref = "keychain://walleterm-testnet/payer_seed"
+max_payment_amount = "0.50"
+```
+
+Fields:
+- `default_payer_secret_ref` (optional): Default payer seed for `walleterm pay`. The value must resolve to a Stellar secret seed (`S...`).
+- `max_payment_amount` (optional): Stringified numeric cap for x402 payments. `walleterm pay` aborts if the requested amount exceeds this cap unless `--yes` is passed.
+
+Notes:
+- `walleterm pay` can override `default_payer_secret_ref` with `--secret-ref`.
+- x402 network mapping currently supports the standard Stellar testnet and mainnet passphrases only.
+- `--dry-run` inspects the 402 challenge without paying.
+
+## 6) Practical Notes
 
 - If you run `setup op` or `setup keychain`, default logical container names are:
   - `walleterm-testnet`
@@ -130,9 +154,11 @@ network_passphrase = "Test SDF Network ; September 2015"
   - `delegated_seed`
   - `channels_api_key`
 - Storing `deployer_seed` is optional (`--include-deployer-seed`).
+- External signer seed fields such as `external_ops_1_seed` are not created automatically; provision those separately in your secret store.
 - `setup keychain` stores those values as macOS generic-password items where:
   - service = `walleterm-<network>`
   - account = field name like `delegated_seed`
 - For submission:
   - Channels mode requires `channels_base_url` and API key (from config or flags).
   - RPC mode only requires `rpc_url` and `network_passphrase`.
+- Setup commands briefly expose secret values in process listings while calling `op` or `security`. Avoid running setup flows on shared machines you do not trust.

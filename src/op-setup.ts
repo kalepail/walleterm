@@ -5,6 +5,18 @@ import { smartAccountKitDeployerKeypair } from "./wallet.js";
 
 const execFileAsync = promisify(execFile);
 
+function filteredEnv(): NodeJS.ProcessEnv {
+  const allow = ["PATH", "HOME", "USER", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TERM"];
+  const env: Record<string, string> = {};
+  for (const key of allow) {
+    if (process.env[key]) env[key] = process.env[key]!;
+  }
+  for (const [key, val] of Object.entries(process.env)) {
+    if ((key.startsWith("OP_") || key.startsWith("WALLETERM_")) && val) env[key] = val;
+  }
+  return env;
+}
+
 export interface SetupOpOptions {
   opBin?: string;
   vault: string;
@@ -65,7 +77,7 @@ async function runOp(opBin: string, args: string[]): Promise<string> {
   try {
     const { stdout } = await execFileAsync(opBin, args, {
       maxBuffer: 1024 * 1024,
-      env: process.env,
+      env: filteredEnv(),
     });
     return stdout.trim();
   } catch (err) {
@@ -77,7 +89,7 @@ async function tryRunOp(opBin: string, args: string[]): Promise<boolean> {
   try {
     await execFileAsync(opBin, args, {
       maxBuffer: 1024 * 1024,
-      env: process.env,
+      env: filteredEnv(),
     });
     return true;
   } catch {
@@ -219,6 +231,10 @@ export async function setupOnePasswordForWallet(opts: SetupOpOptions): Promise<S
   if (includeDeployerSeed) {
     fieldArgs.unshift(`deployer_seed[password]=${deployer.secret()}`);
   }
+
+  process.stderr.write(
+    "Note: Secret values are briefly visible in process listings during storage. This is a platform limitation of the op CLI.\n",
+  );
 
   if (itemExists) {
     await runOp(opBin, ["item", "edit", opts.item, "--vault", opts.vault, ...fieldArgs]);

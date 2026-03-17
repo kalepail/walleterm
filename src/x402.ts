@@ -54,6 +54,8 @@ export interface X402FetchOptions {
   body?: string;
   x402Network: Network;
   dryRun?: boolean;
+  maxPaymentAmount?: string;
+  yes?: boolean;
   fetchFn: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 }
 
@@ -124,6 +126,17 @@ export async function executeX402Request(
   }
 
   const accepted = stellarAccepts[0]!;
+
+  if (opts.maxPaymentAmount && !opts.yes) {
+    const amount = Number(accepted.amount);
+    const max = Number(opts.maxPaymentAmount);
+    if (amount > max) {
+      throw new Error(
+        `Payment amount ${accepted.amount} exceeds configured max_payment_amount ${opts.maxPaymentAmount}. Use --yes to override.`,
+      );
+    }
+  }
+
   process.stderr.write(
     `x402: paying ${accepted.amount} via ${accepted.scheme} on ${accepted.network} to ${accepted.payTo}\n`,
   );

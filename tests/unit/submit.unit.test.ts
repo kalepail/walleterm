@@ -9,6 +9,7 @@ import {
   rpc,
 } from "@stellar/stellar-sdk";
 import { ChannelsClient } from "@openzeppelin/relayer-plugin-channels";
+import type { ChannelsTransactionResponse } from "@openzeppelin/relayer-plugin-channels";
 import { SecretResolver } from "../../src/secrets.js";
 import { submitTxXdrViaRpc, submitViaChannels } from "../../src/submit.js";
 
@@ -48,7 +49,7 @@ describe("submit unit", () => {
       hash: "tx-hash",
       status: "pending",
       transactionId: "tx-id",
-    } as never);
+    } satisfies ChannelsTransactionResponse);
 
     const result = await submitViaChannels(
       { kind: "tx", envelope: { toXDR: () => "AAAA" } } as never,
@@ -74,7 +75,7 @@ describe("submit unit", () => {
       hash: "tx-hash",
       status: "confirmed",
       transactionId: "tx-id",
-    } as never);
+    } satisfies ChannelsTransactionResponse);
     const resolver = new SecretResolver("op");
     const resolveSpy = vi.spyOn(resolver, "resolve").mockResolvedValue("resolved-key");
 
@@ -136,7 +137,7 @@ describe("submit unit", () => {
         hash: "bundle-hash",
         status: "pending",
         transactionId: "bundle-id",
-      } as never);
+      } satisfies ChannelsTransactionResponse);
 
     const bundleResult = await submitViaChannels(
       {
@@ -167,6 +168,21 @@ describe("submit unit", () => {
         { channelsApiKey: "k" },
       ),
     ).rejects.toThrow(/standalone auth entry is not supported/i);
+  });
+
+  it("readDirectOrSecretRef rejects unsupported secret ref scheme", async () => {
+    await expect(
+      submitViaChannels(
+        { kind: "tx", envelope: { toXDR: () => "AAAA" } } as never,
+        {
+          rpc_url: "https://rpc.invalid",
+          network_passphrase: Networks.TESTNET,
+          channels_base_url: "https://channels.example",
+        },
+        new SecretResolver("op"),
+        { channelsApiKeyRef: "env://something" },
+      ),
+    ).rejects.toThrow(/Unsupported secret ref 'env:\/\/something'/);
   });
 
   it("submits signed tx xdr directly to rpc", async () => {

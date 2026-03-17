@@ -33,10 +33,22 @@ function refScheme(raw: string): string | null {
   return match ? normalizeScheme(match[1]!) : null;
 }
 
+function safeEnv(): NodeJS.ProcessEnv {
+  const allow = ["PATH", "HOME", "USER", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TERM"];
+  const env: Record<string, string> = {};
+  for (const key of allow) {
+    if (process.env[key]) env[key] = process.env[key]!;
+  }
+  for (const [key, val] of Object.entries(process.env)) {
+    if ((key.startsWith("OP_") || key.startsWith("WALLETERM_")) && val) env[key] = val;
+  }
+  return env;
+}
+
 function execCommand(bin: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync(bin, args, {
     maxBuffer: 1024 * 1024,
-    env: process.env,
+    env: safeEnv(),
   });
 }
 
@@ -91,6 +103,14 @@ export class OnePasswordSecretProvider implements SecretProvider {
   constructor(private readonly opBin: string = process.env.WALLETERM_OP_BIN ?? "op") {}
 
   async resolve(ref: string): Promise<string> {
+    const withoutScheme = ref.slice("op://".length);
+    const segments = withoutScheme.split("/").filter((s) => s.length > 0);
+    if (segments.length !== 3) {
+      throw new Error(
+        `Invalid 1Password reference '${ref}': expected format op://<vault>/<item>/<field>`,
+      );
+    }
+
     let stdout: string;
     try {
       ({ stdout } = await execCommand(this.opBin, ["read", ref]));
@@ -169,6 +189,10 @@ export class SecretResolver {
 
   supportedSchemes(): string[] {
     return [...this.providersByScheme.keys()].sort();
+  }
+
+  clearCache(): void {
+    this.cache.clear();
   }
 
   async resolve(ref: string): Promise<string> {

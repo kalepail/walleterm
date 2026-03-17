@@ -19,6 +19,7 @@ import {
   listContractSigners,
   makeDelegatedSignerScVal,
   makeExternalSignerScVal,
+  reconcileContractSigners,
   resolveIndexerUrl,
 } from "../../src/wallet.js";
 
@@ -299,32 +300,105 @@ describe("wallet unit", () => {
 
   it("aborts indexer discovery requests after timeout", async () => {
     vi.useFakeTimers();
+    const originalFetch = globalThis.fetch;
     try {
       let aborted = false;
-      vi.stubGlobal(
-        "fetch",
-        vi.fn((_: unknown, init?: RequestInit) => {
-          const signal = init?.signal as AbortSignal | undefined;
-          return new Promise<Response>((_resolve, reject) => {
-            signal?.addEventListener("abort", () => {
-              aborted = true;
-              reject(new Error("aborted"));
-            });
+      (globalThis as { fetch: typeof fetch }).fetch = vi.fn((_: unknown, init?: RequestInit) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            aborted = true;
+            reject(new Error("aborted"));
           });
-        }),
-      );
+        });
+      }) as unknown as typeof fetch;
 
       const pending = discoverContractsByAddress("https://indexer.invalid", "GABC").catch(
         (error: unknown) => error as Error,
       );
-      await vi.advanceTimersByTimeAsync(15_000);
+      vi.advanceTimersByTime(15_000);
       const error = await pending;
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toMatch(/aborted/i);
       expect(aborted).toBe(true);
     } finally {
       vi.useRealTimers();
-      vi.unstubAllGlobals();
+      (globalThis as { fetch: typeof fetch }).fetch = originalFetch;
+      vi.restoreAllMocks();
     }
+  });
+
+  it("reconciles configured vs onchain signers in subset and exact modes", () => {
+    const account = {
+      network: "testnet",
+      contract_id: StrKey.encodeContract(Buffer.alloc(32, 9)),
+      delegated_signers: [
+        { name: "del-a", address: Keypair.random().publicKey(), secret_ref: "op://del-a" },
+      ],
+      external_signers: [
+        {
+          name: "ext-a",
+          verifier_contract_id: StrKey.encodeContract(Buffer.alloc(32, 7)),
+          public_key_hex: Buffer.from(Keypair.random().rawPublicKey()).toString("hex").toUpperCase(),
+          secret_ref: "op://ext-a",
+        },
+      ],
+    };
+
+    const subset = reconcileContractSigners(
+      account,
+      [
+        {
+          context_rule_id: 0,
+          signer_type: "Delegated",
+          signer_address: account.delegated_signers[0]!.address,
+          credential_id: null,
+        },
+        {
+          context_rule_id: 0,
+          signer_type: "External",
+          signer_address: account.external_signers[0]!.verifier_contract_id,
+          credential_id: account.external_signers[0]!.public_key_hex.toLowerCase(),
+        },
+        {
+          context_rule_id: 0,
+          signer_type: "Delegated",
+          signer_address: Keypair.random().publicKey(),
+          credential_id: null,
+        },
+        {
+          context_rule_id: 0,
+          signer_type: "Native",
+          signer_address: null,
+          credential_id: null,
+        },
+      ],
+      "subset",
+    );
+
+    expect(subset.ok).toBe(true);
+    expect(subset.extra.delegated).toHaveLength(1);
+    expect(subset.missing.delegated).toHaveLength(0);
+
+    const exact = reconcileContractSigners(
+      account,
+      [
+        {
+          context_rule_id: 0,
+          signer_type: "Delegated",
+          signer_address: account.delegated_signers[0]!.address,
+          credential_id: null,
+        },
+      ],
+      "exact",
+    );
+
+    expect(exact.ok).toBe(false);
+    expect(exact.missing.external).toEqual([
+      {
+        verifier_contract_id: account.external_signers[0]!.verifier_contract_id,
+        public_key_hex: account.external_signers[0]!.public_key_hex.toLowerCase(),
+      },
+    ]);
   });
 });

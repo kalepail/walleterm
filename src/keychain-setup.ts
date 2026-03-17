@@ -7,6 +7,18 @@ import { smartAccountKitDeployerKeypair } from "./wallet.js";
 
 const execFileAsync = promisify(execFile);
 
+function filteredEnv(): NodeJS.ProcessEnv {
+  const allow = ["PATH", "HOME", "USER", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TERM"];
+  const env: Record<string, string> = {};
+  for (const key of allow) {
+    if (process.env[key]) env[key] = process.env[key]!;
+  }
+  for (const [key, val] of Object.entries(process.env)) {
+    if (key.startsWith("WALLETERM_") && val) env[key] = val;
+  }
+  return env;
+}
+
 export interface SetupKeychainOptions {
   securityBin?: string;
   service: string;
@@ -77,7 +89,7 @@ async function runSecurity(
   try {
     const { stdout } = await execFileAsync(securityBin, fullArgs, {
       maxBuffer: 1024 * 1024,
-      env: process.env,
+      env: filteredEnv(),
     });
     return stdout.trim();
   } catch (error) {
@@ -99,7 +111,7 @@ async function hasGenericPassword(
       argsWithOptionalKeychain(["find-generic-password", "-a", account, "-s", service], keychain),
       {
         maxBuffer: 1024 * 1024,
-        env: process.env,
+        env: filteredEnv(),
       },
     );
     return true;
@@ -251,6 +263,10 @@ export async function setupMacOSKeychainForWallet(
       `Keychain service '${opts.service}' already contains ${existingAccounts.join(", ")}. Re-run with --force to overwrite those entries.`,
     );
   }
+
+  process.stderr.write(
+    "Note: Secret values are briefly visible in process listings during storage. This is a platform limitation of the security CLI.\n",
+  );
 
   for (const field of plannedFields) {
     await storeGenericPassword(
