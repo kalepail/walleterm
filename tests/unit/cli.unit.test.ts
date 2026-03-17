@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Keypair, Networks, StrKey } from "@stellar/stellar-sdk";
 import { Command } from "commander";
 
@@ -13,6 +13,7 @@ const mocks = {
   mockSignInput: vi.fn(),
   mockWriteOutput: vi.fn(),
   mockLoadConfig: vi.fn(),
+  mockResolveAccount: vi.fn(),
   mockResolveNetwork: vi.fn(),
   mockDefaultServiceForNetwork: vi.fn(),
   mockSetupMacOSKeychainForWallet: vi.fn(),
@@ -44,6 +45,7 @@ const {
   mockResolveAccountForCommand,
   mockSignInput,
   mockLoadConfig,
+  mockResolveAccount,
   mockResolveNetwork,
   mockDefaultServiceForNetwork,
   mockSetupMacOSKeychainForWallet,
@@ -79,6 +81,7 @@ vi.mock("../../src/core.js", () => ({
 
 vi.mock("../../src/config.js", () => ({
   loadConfig: mocks.mockLoadConfig,
+  resolveAccount: mocks.mockResolveAccount,
   resolveNetwork: mocks.mockResolveNetwork,
 }));
 
@@ -121,15 +124,18 @@ vi.mock("../../src/secrets.js", () => {
   return { SecretResolver };
 });
 
-import { runCli } from "../../src/cli.js";
-
 async function run(args: string[]) {
+  const { runCli } = await import("../../src/cli.js");
   let stdout = "";
   let stderr = "";
   const outWrite = process.stdout.write.bind(process.stdout);
   const errWrite = process.stderr.write.bind(process.stderr);
+  const originalThrowOnCliError = process.env.WALLETERM_THROW_ON_CLI_ERROR;
   const originalExitCode = process.exitCode;
   process.exitCode = 0;
+  process.env.WALLETERM_THROW_ON_CLI_ERROR = "1";
+  let caughtError: unknown;
+  let exitCode = 0;
 
   process.stdout.write = ((chunk: unknown) => {
     stdout += typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8");
@@ -143,13 +149,34 @@ async function run(args: string[]) {
 
   try {
     await runCli(["bun", "walleterm", ...args]);
+    exitCode = process.exitCode ?? 0;
+  } catch (error) {
+    caughtError = error;
+    exitCode = process.exitCode ?? 0;
   } finally {
     process.stdout.write = outWrite;
     process.stderr.write = errWrite;
+    if (originalThrowOnCliError === undefined) {
+      delete process.env.WALLETERM_THROW_ON_CLI_ERROR;
+    } else {
+      process.env.WALLETERM_THROW_ON_CLI_ERROR = originalThrowOnCliError;
+    }
+    process.exitCode = originalExitCode;
   }
 
-  const exitCode = process.exitCode ?? 0;
-  process.exitCode = originalExitCode;
+  if (caughtError !== undefined) {
+    if (caughtError instanceof Error) {
+      const errorWithOutput = caughtError as Error & {
+        stdout?: string;
+        stderr?: string;
+        exitCode?: number;
+      };
+      errorWithOutput.stdout ??= stdout;
+      errorWithOutput.stderr ??= stderr;
+      errorWithOutput.exitCode ??= exitCode;
+    }
+    throw caughtError;
+  }
 
   if (exitCode !== 0) {
     const err = new Error(stderr.trim() || `CLI exited with code ${exitCode}`) as Error & {
@@ -202,6 +229,13 @@ beforeEach(() => {
   mockResolveNetwork.mockImplementation((config: any, explicit?: string) => {
     const name = explicit ?? "testnet";
     return { name, config: config.networks[name] };
+  });
+
+  mockResolveAccount.mockImplementation((config: any, networkName: string, explicit?: string) => {
+    if (!explicit) return null;
+    const account = config.smart_accounts[explicit];
+    if (!account || account.network !== networkName) return null;
+    return { alias: explicit, account };
   });
 
   mockResolveAccountForCommand.mockReturnValue({
@@ -292,6 +326,15 @@ beforeEach(() => {
   mockSmartAccountKitDeployerKeypair.mockReturnValue(deployer);
 
   mockSecretResolve.mockResolvedValue(Keypair.random().secret());
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  process.exitCode = 0;
+});
+
+afterAll(() => {
+  process.exitCode = 0;
 });
 
 describe("cli unit", () => {
@@ -1042,23 +1085,15 @@ describe("cli unit", () => {
   });
 
   it("removed legacy commands are rejected", async () => {
-    await expect(run(["inspect", "--in", "in.txt"])).rejects.toThrow(/unknown command/i);
-    await expect(run(["can-sign", "--in", "in.txt"])).rejects.toThrow(/unknown command/i);
-    await expect(run(["keys", "create"])).rejects.toThrow(/unknown command/i);
-    await expect(run(["wallet", "discover", "--address", "GABC"])).rejects.toThrow(
-      /unknown command/i,
-    );
-    await expect(run(["wallet", "list-signers", "--contract-id", CONTRACT_ID])).rejects.toThrow(
-      /unknown command/i,
-    );
-    await expect(run(["wallet", "reconcile", "--account", "treasury"])).rejects.toThrow(
-      /unknown command/i,
-    );
-    await expect(run(["wallet", "signer", "verify", "--account", "treasury"])).rejects.toThrow(
-      /unknown command/i,
-    );
-    await expect(
-      run([
+    const legacyCommands = [
+      ["inspect", "--in", "in.txt"],
+      ["can-sign", "--in", "in.txt"],
+      ["keys", "create"],
+      ["wallet", "discover", "--address", "GABC"],
+      ["wallet", "list-signers", "--contract-id", CONTRACT_ID],
+      ["wallet", "reconcile", "--account", "treasury"],
+      ["wallet", "signer", "verify", "--account", "treasury"],
+      [
         "wallet",
         "add-delegated-signer",
         "--account",
@@ -1067,8 +1102,12 @@ describe("cli unit", () => {
         Keypair.random().publicKey(),
         "--out",
         "out.json",
-      ]),
-    ).rejects.toThrow(/unknown command/i);
+      ],
+    ];
+
+    for (const commandArgs of legacyCommands) {
+      await expect(run(commandArgs)).rejects.toThrow(/unknown command/i);
+    }
   });
 
   it("wallet create validates incompatible options and invalid signer tuples", async () => {

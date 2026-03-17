@@ -142,10 +142,7 @@ function normalizeHex(hex: string): string {
   return hex.toLowerCase().replace(/^0x/, "");
 }
 
-function compositeExternalSignerKey(
-  verifierContractId: string,
-  publicKeyHex: string,
-): string {
+function compositeExternalSignerKey(verifierContractId: string, publicKeyHex: string): string {
   return `${verifierContractId}|${normalizeHex(publicKeyHex)}`;
 }
 
@@ -258,12 +255,16 @@ export function reconcileContractSigners(
   onchainSigners: ContractSignerRow[],
   mode: SignerMode = "subset",
 ): SignerReconciliation {
-  const configuredDelegated = [...new Set((account.delegated_signers ?? [])
-    .filter((row) => row.enabled !== false)
-    .map((row) => row.address))].sort();
+  const configuredDelegated = [
+    ...new Set(
+      (account.delegated_signers ?? [])
+        .filter((row) => row.enabled !== false)
+        .map((row) => row.address),
+    ),
+  ].sort();
 
-  const configuredExternal = sortExternalSigners(
-    [...new Map(
+  const configuredExternal = sortExternalSigners([
+    ...new Map(
       (account.external_signers ?? [])
         .filter((row) => row.enabled !== false)
         .map((row) => {
@@ -276,17 +277,19 @@ export function reconcileContractSigners(
             signer,
           ] as const;
         }),
-    ).values()],
-  );
+    ).values(),
+  ]);
 
-  const onchainDelegated = [...new Set(
-    onchainSigners
-      .filter((row) => row.signer_type === "Delegated" && typeof row.signer_address === "string")
-      .map((row) => row.signer_address as string),
-  )].sort();
+  const onchainDelegated = [
+    ...new Set(
+      onchainSigners
+        .filter((row) => row.signer_type === "Delegated" && typeof row.signer_address === "string")
+        .map((row) => row.signer_address as string),
+    ),
+  ].sort();
 
-  const onchainExternal = sortExternalSigners(
-    [...new Map(
+  const onchainExternal = sortExternalSigners([
+    ...new Map(
       onchainSigners
         .filter(
           (row) =>
@@ -304,13 +307,15 @@ export function reconcileContractSigners(
             signer,
           ] as const;
         }),
-    ).values()],
-  );
+    ).values(),
+  ]);
 
   const onchainDelegatedSet = new Set(onchainDelegated);
   const configuredDelegatedSet = new Set(configuredDelegated);
   const onchainExternalSet = new Set(
-    onchainExternal.map((row) => compositeExternalSignerKey(row.verifier_contract_id, row.public_key_hex)),
+    onchainExternal.map((row) =>
+      compositeExternalSignerKey(row.verifier_contract_id, row.public_key_hex),
+    ),
   );
   const configuredExternalSet = new Set(
     configuredExternal.map((row) =>
@@ -318,15 +323,21 @@ export function reconcileContractSigners(
     ),
   );
 
-  const missingDelegated = configuredDelegated.filter((address) => !onchainDelegatedSet.has(address));
+  const missingDelegated = configuredDelegated.filter(
+    (address) => !onchainDelegatedSet.has(address),
+  );
   const missingExternal = configuredExternal.filter(
     (row) =>
-      !onchainExternalSet.has(compositeExternalSignerKey(row.verifier_contract_id, row.public_key_hex)),
+      !onchainExternalSet.has(
+        compositeExternalSignerKey(row.verifier_contract_id, row.public_key_hex),
+      ),
   );
   const extraDelegated = onchainDelegated.filter((address) => !configuredDelegatedSet.has(address));
   const extraExternal = onchainExternal.filter(
     (row) =>
-      !configuredExternalSet.has(compositeExternalSignerKey(row.verifier_contract_id, row.public_key_hex)),
+      !configuredExternalSet.has(
+        compositeExternalSignerKey(row.verifier_contract_id, row.public_key_hex),
+      ),
   );
 
   const ok =

@@ -11,10 +11,14 @@ export async function runCliInProcess(
   envOverrides?: NodeJS.ProcessEnv,
 ): Promise<CliRunResult> {
   const previousEnv = new Map<string, string | undefined>();
-  const keys = Object.keys(envOverrides ?? {});
+  const effectiveOverrides: NodeJS.ProcessEnv = {
+    ...envOverrides,
+    WALLETERM_THROW_ON_CLI_ERROR: envOverrides?.WALLETERM_THROW_ON_CLI_ERROR ?? "1",
+  };
+  const keys = Object.keys(effectiveOverrides);
   for (const key of keys) {
     previousEnv.set(key, process.env[key]);
-    const value = envOverrides?.[key];
+    const value = effectiveOverrides[key];
     if (value === undefined) {
       delete process.env[key];
     } else {
@@ -28,6 +32,8 @@ export async function runCliInProcess(
   const errWrite = process.stderr.write.bind(process.stderr);
   const originalExitCode = process.exitCode;
   process.exitCode = 0;
+  let caughtError: unknown;
+  let exitCode = 0;
 
   process.stdout.write = ((chunk: unknown) => {
     stdout += typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8");
@@ -41,6 +47,10 @@ export async function runCliInProcess(
 
   try {
     await runCli(["bun", "walleterm", ...args]);
+    exitCode = process.exitCode ?? 0;
+  } catch (error) {
+    caughtError = error;
+    exitCode = process.exitCode ?? 0;
   } finally {
     process.stdout.write = outWrite;
     process.stderr.write = errWrite;
@@ -52,10 +62,22 @@ export async function runCliInProcess(
         process.env[key] = prev;
       }
     }
+    process.exitCode = originalExitCode;
   }
 
-  const exitCode = process.exitCode ?? 0;
-  process.exitCode = originalExitCode;
+  if (caughtError !== undefined) {
+    if (caughtError instanceof Error) {
+      const errorWithOutput = caughtError as Error & {
+        stdout?: string;
+        stderr?: string;
+        exitCode?: number;
+      };
+      errorWithOutput.stdout ??= stdout;
+      errorWithOutput.stderr ??= stderr;
+      errorWithOutput.exitCode ??= exitCode;
+    }
+    throw caughtError;
+  }
 
   if (exitCode !== 0) {
     const err = new Error(stderr.trim() || `CLI exited with code ${exitCode}`) as Error & {

@@ -258,7 +258,7 @@ describe("wallet unit", () => {
           "100",
           tx as any,
           Networks.TESTNET,
-        ) as never,
+        ) as unknown as Awaited<ReturnType<rpc.Server["prepareTransaction"]>>,
     );
 
     const out = await createWalletDeployTx({
@@ -339,7 +339,9 @@ describe("wallet unit", () => {
         {
           name: "ext-a",
           verifier_contract_id: StrKey.encodeContract(Buffer.alloc(32, 7)),
-          public_key_hex: Buffer.from(Keypair.random().rawPublicKey()).toString("hex").toUpperCase(),
+          public_key_hex: Buffer.from(Keypair.random().rawPublicKey())
+            .toString("hex")
+            .toUpperCase(),
           secret_ref: "op://ext-a",
         },
       ],

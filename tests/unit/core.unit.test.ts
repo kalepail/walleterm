@@ -36,6 +36,15 @@ import {
 } from "../../src/core.js";
 import type { SecretResolver } from "../../src/secrets.js";
 
+type MockedTxLike = {
+  source: string;
+  operations: unknown;
+  innerTransaction: {
+    source: string;
+    operations: unknown;
+  };
+};
+
 const PASS = Networks.TESTNET;
 const CONTRACT = StrKey.encodeContract(Buffer.alloc(32, 7));
 
@@ -973,11 +982,15 @@ describe("core unit", () => {
       source,
     );
 
-    const fromXdrSpy = vi.spyOn(TransactionBuilder, "fromXDR").mockReturnValue({
+    const mockedTx: MockedTxLike = {
       source: source.publicKey(),
       operations: null,
       innerTransaction: { source: inner.publicKey(), operations: null },
-    } as never);
+    };
+
+    const fromXdrSpy = vi
+      .spyOn(TransactionBuilder, "fromXDR")
+      .mockReturnValue(mockedTx as unknown as ReturnType<typeof TransactionBuilder.fromXDR>);
 
     const runtime = makeRuntimeSigners({
       delegated: [

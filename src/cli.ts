@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { Keypair, xdr } from "@stellar/stellar-sdk";
 import {
   canSignInput,
@@ -366,10 +366,13 @@ async function runSignerMutation(
   }
 }
 
-function formatSignerReconciliationIssue(kind: "missing" | "extra", reconciliation: {
-  delegated: string[];
-  external: Array<{ verifier_contract_id: string; public_key_hex: string }>;
-}): string | null {
+function formatSignerReconciliationIssue(
+  kind: "missing" | "extra",
+  reconciliation: {
+    delegated: string[];
+    external: Array<{ verifier_contract_id: string; public_key_hex: string }>;
+  },
+): string | null {
   const parts: string[] = [];
   if (reconciliation.delegated.length > 0) {
     parts.push(`delegated=[${reconciliation.delegated.join(", ")}]`);
@@ -436,7 +439,11 @@ function resolveWalletCreateWasmHash(
   const configuredHash = accountRef?.account.expected_wasm_hash;
   const explicitHash = opts.wasmHash;
 
-  if (explicitHash && configuredHash && explicitHash.toLowerCase() !== configuredHash.toLowerCase()) {
+  if (
+    explicitHash &&
+    configuredHash &&
+    explicitHash.toLowerCase() !== configuredHash.toLowerCase()
+  ) {
     throw new Error(
       `wallet create wasm hash mismatch for account '${accountRef!.alias}': explicit --wasm-hash does not match smart_accounts.${accountRef!.alias}.expected_wasm_hash`,
     );
@@ -455,6 +462,7 @@ function resolveWalletCreateWasmHash(
 }
 
 const program = new Command();
+program.exitOverride();
 program
   .name("walleterm")
   .description("OpenZeppelin smart-account interface for Stellar")
@@ -1211,10 +1219,16 @@ wallet
 
 export async function runCli(argv: string[]): Promise<void> {
   await program.parseAsync(argv).catch((error: unknown) => {
+    if (error instanceof CommanderError && error.exitCode === 0) {
+      return;
+    }
     /* c8 ignore next */
     const message = error instanceof Error ? error.message : String(error);
+    if (process.env.WALLETERM_THROW_ON_CLI_ERROR === "1") {
+      throw error instanceof Error ? error : new Error(message);
+    }
     process.stderr.write(`${message}\n`);
-    process.exitCode = 1;
+    process.exitCode = error instanceof CommanderError ? error.exitCode : 1;
   });
 }
 
