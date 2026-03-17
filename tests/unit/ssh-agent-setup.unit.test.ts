@@ -1,8 +1,18 @@
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
-import { setupSshAgentForWallet } from "../../src/ssh-agent-setup.js";
+import {
+  appendToAgentToml,
+  generateSshAgentKey,
+  generateSshAgentKey1Password,
+  generateSshAgentKeySystem,
+  parseOpenSshEd25519PubKey,
+  resolve1PasswordAgentTomlPath,
+  setupSshAgentForWallet,
+} from "../../src/ssh-agent-setup.js";
 import { makeFakeSshAgentFixture } from "../helpers/fake-ssh-agent.js";
 import { makeTempDir } from "../helpers/temp-dir.js";
 
@@ -314,4 +324,568 @@ describe("ssh-agent-setup unit", () => {
       Buffer.from(kp.rawPublicKey()).toString("hex"),
     );
   });
+
+  it("parseOpenSshEd25519PubKey decodes valid ssh-ed25519 keys", () => {
+    const kp = Keypair.random();
+    const blob = buildKeyBlob(Buffer.from(kp.rawPublicKey()));
+    const line = `ssh-ed25519 ${blob.toString("base64")} test@example`;
+
+    const parsed = parseOpenSshEd25519PubKey(line);
+    expect(parsed.equals(Buffer.from(kp.rawPublicKey()))).toBe(true);
+  });
+
+  it("parseOpenSshEd25519PubKey rejects non-ed25519 and malformed key lengths", () => {
+    expect(() => parseOpenSshEd25519PubKey("ssh-rsa AAAA test")).toThrow(/Not an ssh-ed25519/);
+
+    const malformedBlob = Buffer.concat([
+      writeString("ssh-ed25519"),
+      writeString(Buffer.alloc(31, 1)),
+    ]);
+    expect(() =>
+      parseOpenSshEd25519PubKey(`ssh-ed25519 ${malformedBlob.toString("base64")}`),
+    ).toThrow(/Expected 32-byte Ed25519 key/);
+
+    const wrongAlgoBlob = Buffer.concat([
+      writeString("ssh-rsa"),
+      writeString(Buffer.alloc(32, 1)),
+    ]);
+    expect(() =>
+      parseOpenSshEd25519PubKey(`ssh-ed25519 ${wrongAlgoBlob.toString("base64")}`),
+    ).toThrow(/Not an ssh-ed25519 public key/);
+  });
+
+  it("appendToAgentToml adds blocks once and avoids duplicates", () => {
+    const root = makeTempDir("walleterm-agent-toml-");
+    const tomlPath = join(root, "agent.toml");
+
+    expect(appendToAgentToml(tomlPath, "wallet-key", "Private")).toBe(true);
+    expect(appendToAgentToml(tomlPath, "wallet-key", "Private")).toBe(false);
+
+    const content = readFileSync(tomlPath, "utf8");
+    expect(content).toContain('[[ssh-keys]]');
+    expect(content).toContain('item = "wallet-key"');
+    expect(content).toContain('vault = "Private"');
+    expect((content.match(/\[\[ssh-keys\]\]/g) || []).length).toBe(1);
+  });
+
+  it("appendToAgentToml preserves formatting when appending to existing content", () => {
+    const root = makeTempDir("walleterm-agent-toml-format-");
+    const tomlPath = join(root, "agent.toml");
+
+    writeFileSync(tomlPath, '[[ssh-keys]]\nitem = "existing"\nvault = "Private"', "utf8");
+    expect(appendToAgentToml(tomlPath, "wallet-key", "Private")).toBe(true);
+    expect(readFileSync(tomlPath, "utf8")).toContain(
+      'vault = "Private"\n\n[[ssh-keys]]\nitem = "wallet-key"',
+    );
+  });
+
+  it("appendToAgentToml appends with a single newline when content already ends with one", () => {
+    const root = makeTempDir("walleterm-agent-toml-trailing-newline-");
+    const tomlPath = join(root, "agent.toml");
+
+    writeFileSync(tomlPath, '[[ssh-keys]]\nitem = "existing"\nvault = "Private"\n', "utf8");
+    expect(appendToAgentToml(tomlPath, "wallet-key", "Private")).toBe(true);
+    expect(readFileSync(tomlPath, "utf8")).toContain(
+      'vault = "Private"\n\n[[ssh-keys]]\nitem = "wallet-key"',
+    );
+  });
+
+  it("resolve1PasswordAgentTomlPath uses the user config home", () => {
+    expect(resolve1PasswordAgentTomlPath()).toBe(
+      join(homedir(), ".config", "1Password", "ssh", "agent.toml"),
+    );
+  });
+
+  it("generateSshAgentKeySystem generates a key file, adds it, and returns refs", async () => {
+    const kp = Keypair.random();
+    const fx = await makeFakeSshAgentFixture(kp);
+    cleanups.push(fx.cleanup);
+
+    const root = makeTempDir("walleterm-system-generate-");
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const keyPath = join(root, "generated_ed25519");
+    const sshKeygenBin = join(binDir, "ssh-keygen");
+    const sshAddBin = join(binDir, "ssh-add");
+    const pubLine = buildOpenSshLine(kp, "walleterm");
+
+    writeFileSync(
+      sshKeygenBin,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = process.argv[process.argv.indexOf("-f") + 1];
+fs.mkdirSync(require("node:path").dirname(path), { recursive: true });
+fs.writeFileSync(path, "PRIVATE", { mode: 0o600 });
+fs.writeFileSync(path + ".pub", ${JSON.stringify(`${pubLine}\n`)}, "utf8");
+`,
+      "utf8",
+    );
+    chmodSync(sshKeygenBin, 0o755);
+
+    writeFileSync(sshAddBin, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
+    chmodSync(sshAddBin, 0o755);
+
+    const previousSock = process.env.SSH_AUTH_SOCK;
+    process.env.SSH_AUTH_SOCK = fx.socketPath;
+    try {
+      const result = await generateSshAgentKeySystem({
+        backend: "system",
+        keyPath,
+        sshKeygenBin,
+        sshAddBin,
+      });
+
+      expect(result.backend).toBe("system");
+      expect(result.generated).toBe(true);
+      expect(result.key.stellar_address).toBe(kp.publicKey());
+      expect(result.key.comment).toBe(`fake-key-${kp.publicKey().slice(0, 8)}`);
+      expect(result.key.ref).toBe(`ssh-agent://system/${kp.publicKey()}`);
+      expect(result.key_path).toBe(keyPath);
+      expect(result.public_key_path).toBe(`${keyPath}.pub`);
+      expect(existsSync(keyPath)).toBe(true);
+      expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+    } finally {
+      if (previousSock === undefined) delete process.env.SSH_AUTH_SOCK;
+      else process.env.SSH_AUTH_SOCK = previousSock;
+    }
+  });
+
+  it("generateSshAgentKeySystem rejects duplicate key paths and missing agent identity", async () => {
+    const root = makeTempDir("walleterm-system-generate-errors-");
+    const keyPath = join(root, "generated_ed25519");
+    writeFileSync(keyPath, "already-exists", { mode: 0o600 });
+
+    await expect(generateSshAgentKeySystem({ backend: "system", keyPath })).rejects.toThrow(
+      /Key file already exists/,
+    );
+
+    const kp = Keypair.random();
+    const otherKp = Keypair.random();
+    const fx = await makeFakeSshAgentFixture(otherKp);
+    cleanups.push(fx.cleanup);
+
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const freshKeyPath = join(root, "fresh_ed25519");
+    const sshKeygenBin = join(binDir, "ssh-keygen");
+    const sshAddBin = join(binDir, "ssh-add");
+
+    writeFileSync(
+      sshKeygenBin,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = process.argv[process.argv.indexOf("-f") + 1];
+fs.mkdirSync(require("node:path").dirname(path), { recursive: true });
+fs.writeFileSync(path, "PRIVATE", { mode: 0o600 });
+fs.writeFileSync(path + ".pub", ${JSON.stringify(`${buildOpenSshLine(kp, "walleterm")}\n`)}, "utf8");
+`,
+      "utf8",
+    );
+    chmodSync(sshKeygenBin, 0o755);
+    writeFileSync(sshAddBin, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
+    chmodSync(sshAddBin, 0o755);
+
+    const previousSock = process.env.SSH_AUTH_SOCK;
+    process.env.SSH_AUTH_SOCK = fx.socketPath;
+    try {
+      await expect(
+        generateSshAgentKeySystem({
+          backend: "system",
+          keyPath: freshKeyPath,
+          sshKeygenBin,
+          sshAddBin,
+        }),
+      ).rejects.toThrow(/it was not found in the SSH agent/);
+    } finally {
+      if (previousSock === undefined) delete process.env.SSH_AUTH_SOCK;
+      else process.env.SSH_AUTH_SOCK = previousSock;
+    }
+  });
+
+  it("generateSshAgentKey1Password creates an item and updates agent.toml when the key appears", async () => {
+    const kp = Keypair.random();
+    const fx = await makeFakeSshAgentFixture(kp);
+    cleanups.push(fx.cleanup);
+
+    const root = makeTempDir("walleterm-1p-generate-");
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const opBin = join(binDir, "op");
+    const agentTomlPath = join(root, "agent.toml");
+
+    writeFileSync(
+      opBin,
+      `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  id: "item-123",
+  fields: [{ id: "public_key", value: ${JSON.stringify(buildOpenSshLine(kp, "wallet@1p"))} }]
+}));
+`,
+      "utf8",
+    );
+    chmodSync(opBin, 0o755);
+
+    const result = await generateSshAgentKey1Password({
+      backend: "1password",
+      socketPath: fx.socketPath,
+      opBin,
+      vault: "Private",
+      title: "wallet-key",
+      agentTomlPath,
+    });
+
+    expect(result.backend).toBe("1password");
+    expect(result.generated).toBe(true);
+    expect(result.key.stellar_address).toBe(kp.publicKey());
+    expect(result.key.comment).toBe(`fake-key-${kp.publicKey().slice(0, 8)}`);
+    expect(result.op_item_id).toBe("item-123");
+    expect(result.agent_toml_path).toBe(agentTomlPath);
+    expect(result.agent_toml_updated).toBe(true);
+    expect(readFileSync(agentTomlPath, "utf8")).toContain('item = "wallet-key"');
+  });
+
+  it("generateSshAgentKey1Password rejects item payloads without public_key", async () => {
+    const fx = await makeFakeSshAgentFixture();
+    cleanups.push(fx.cleanup);
+
+    const root = makeTempDir("walleterm-1p-missing-pubkey-");
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const opBin = join(binDir, "op");
+
+    writeFileSync(
+      opBin,
+      `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({ id: "item-789", fields: [] }));
+`,
+      "utf8",
+    );
+    chmodSync(opBin, 0o755);
+
+    await expect(
+      generateSshAgentKey1Password({
+        backend: "1password",
+        socketPath: fx.socketPath,
+        opBin,
+      }),
+    ).rejects.toThrow(/did not contain a public_key field/);
+  });
+
+  it("generateSshAgentKey1Password warns when the key is not yet visible in the agent", async () => {
+    const kp = Keypair.random();
+    const otherKp = Keypair.random();
+    const fx = await makeFakeSshAgentFixture(otherKp);
+    cleanups.push(fx.cleanup);
+
+    const root = makeTempDir("walleterm-1p-warn-");
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const opBin = join(binDir, "op");
+    const agentTomlPath = join(root, "agent.toml");
+
+    writeFileSync(
+      opBin,
+      `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  id: "item-456",
+  fields: [{ id: "public_key", value: ${JSON.stringify(buildOpenSshLine(kp, "wallet@1p"))} }]
+}));
+`,
+      "utf8",
+    );
+    chmodSync(opBin, 0o755);
+
+    let stderr = "";
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: unknown) => {
+      stderr += typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8");
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      const result = await generateSshAgentKey1Password({
+        backend: "1password",
+        socketPath: fx.socketPath,
+        opBin,
+        vault: "Private",
+        title: "wallet-key",
+        agentTomlPath,
+      });
+      expect(result.key.comment).toBe("");
+      expect(stderr).toContain("not yet visible in the SSH agent");
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  }, 7000);
+
+  it("generateSshAgentKey1Password uses env/default fallbacks when options are omitted", async () => {
+    const kp = Keypair.random();
+    const fx = await makeFakeSshAgentFixture(kp);
+    cleanups.push(fx.cleanup);
+
+    const root = makeTempDir("walleterm-1p-defaults-");
+    const binDir = join(root, "bin");
+    const configHome = join(root, "home");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(configHome, { recursive: true });
+    const opBin = join(binDir, "op-from-env");
+
+    writeFileSync(
+      opBin,
+      `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  id: "item-defaults",
+  fields: [{ id: "public_key", value: ${JSON.stringify(buildOpenSshLine(kp, "wallet@1p"))} }]
+}));
+`,
+      "utf8",
+    );
+    chmodSync(opBin, 0o755);
+
+    const previousOpBin = process.env.WALLETERM_OP_BIN;
+    const previousHome = process.env.HOME;
+    process.env.WALLETERM_OP_BIN = opBin;
+    process.env.HOME = configHome;
+
+    try {
+      const result = await generateSshAgentKey1Password({
+        backend: "1password",
+        socketPath: fx.socketPath,
+      });
+
+      expect(result.op_vault).toBe("Private");
+      expect(result.op_title).toBe("walleterm-ed25519");
+      expect(result.op_item_id).toBe("item-defaults");
+      expect(result.agent_toml_path).toBe(resolve1PasswordAgentTomlPath());
+      expect(result.agent_toml_updated).toBe(true);
+      expect(readFileSync(result.agent_toml_path!, "utf8")).toContain('item = "walleterm-ed25519"');
+    } finally {
+      if (previousOpBin === undefined) delete process.env.WALLETERM_OP_BIN;
+      else process.env.WALLETERM_OP_BIN = previousOpBin;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+  });
+
+  it("generateSshAgentKey1Password falls back to the default op binary name via PATH", async () => {
+    const kp = Keypair.random();
+    const fx = await makeFakeSshAgentFixture(kp);
+    cleanups.push(fx.cleanup);
+
+    const root = makeTempDir("walleterm-1p-path-default-");
+    const binDir = join(root, "bin");
+    const configHome = join(root, "home");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(configHome, { recursive: true });
+    const opBin = join(binDir, "op");
+
+    writeFileSync(
+      opBin,
+      `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({
+  id: "item-path-default",
+  fields: [{ id: "public_key", value: ${JSON.stringify(buildOpenSshLine(kp, "wallet@1p"))} }]
+}));
+`,
+      "utf8",
+    );
+    chmodSync(opBin, 0o755);
+
+    const previousOpBin = process.env.WALLETERM_OP_BIN;
+    const previousHome = process.env.HOME;
+    const previousPath = process.env.PATH;
+    delete process.env.WALLETERM_OP_BIN;
+    process.env.HOME = configHome;
+    process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+
+    try {
+      const result = await generateSshAgentKey1Password({
+        backend: "1password",
+        socketPath: fx.socketPath,
+      });
+      expect(result.op_item_id).toBe("item-path-default");
+    } finally {
+      if (previousOpBin === undefined) delete process.env.WALLETERM_OP_BIN;
+      else process.env.WALLETERM_OP_BIN = previousOpBin;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
+  it("generateSshAgentKeySystem uses env-provided binaries and default key path", async () => {
+    const kp = Keypair.random();
+    const fx = await makeFakeSshAgentFixture(kp);
+    cleanups.push(fx.cleanup);
+
+    const root = makeTempDir("walleterm-system-defaults-");
+    const binDir = join(root, "bin");
+    const fakeHome = join(root, "home");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(fakeHome, { recursive: true });
+    const sshKeygenBin = join(binDir, "ssh-keygen-from-env");
+    const sshAddBin = join(binDir, "ssh-add-from-env");
+    const defaultKeyPath = join(fakeHome, ".ssh", "walleterm_ed25519");
+
+    writeFileSync(
+      sshKeygenBin,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = process.argv[process.argv.indexOf("-f") + 1];
+fs.mkdirSync(require("node:path").dirname(path), { recursive: true });
+fs.writeFileSync(path, "PRIVATE", { mode: 0o600 });
+fs.writeFileSync(path + ".pub", ${JSON.stringify(`${buildOpenSshLine(kp, "walleterm")}
+`)}, "utf8");
+`,
+      "utf8",
+    );
+    chmodSync(sshKeygenBin, 0o755);
+    writeFileSync(sshAddBin, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
+    chmodSync(sshAddBin, 0o755);
+
+    const previousSock = process.env.SSH_AUTH_SOCK;
+    const previousHome = process.env.HOME;
+    const previousKeygen = process.env.WALLETERM_SSH_KEYGEN_BIN;
+    const previousAdd = process.env.WALLETERM_SSH_ADD_BIN;
+    process.env.SSH_AUTH_SOCK = fx.socketPath;
+    process.env.HOME = fakeHome;
+    process.env.WALLETERM_SSH_KEYGEN_BIN = sshKeygenBin;
+    process.env.WALLETERM_SSH_ADD_BIN = sshAddBin;
+
+    try {
+      const result = await generateSshAgentKeySystem({ backend: "system" });
+      expect(result.key_path).toBe(defaultKeyPath);
+      expect(result.public_key_path).toBe(`${defaultKeyPath}.pub`);
+      expect(existsSync(defaultKeyPath)).toBe(true);
+    } finally {
+      if (previousSock === undefined) delete process.env.SSH_AUTH_SOCK;
+      else process.env.SSH_AUTH_SOCK = previousSock;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousKeygen === undefined) delete process.env.WALLETERM_SSH_KEYGEN_BIN;
+      else process.env.WALLETERM_SSH_KEYGEN_BIN = previousKeygen;
+      if (previousAdd === undefined) delete process.env.WALLETERM_SSH_ADD_BIN;
+      else process.env.WALLETERM_SSH_ADD_BIN = previousAdd;
+    }
+  });
+
+  it("generateSshAgentKeySystem falls back to default binary names via PATH", async () => {
+    const kp = Keypair.random();
+    const fx = await makeFakeSshAgentFixture(kp);
+    cleanups.push(fx.cleanup);
+
+    const root = makeTempDir("walleterm-system-path-default-");
+    const binDir = join(root, "bin");
+    const fakeHome = join(root, "home");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(fakeHome, { recursive: true });
+    const sshKeygenBin = join(binDir, "ssh-keygen");
+    const sshAddBin = join(binDir, "ssh-add");
+    const defaultKeyPath = join(fakeHome, ".ssh", "walleterm_ed25519");
+
+    writeFileSync(
+      sshKeygenBin,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = process.argv[process.argv.indexOf("-f") + 1];
+fs.mkdirSync(require("node:path").dirname(path), { recursive: true });
+fs.writeFileSync(path, "PRIVATE", { mode: 0o600 });
+fs.writeFileSync(path + ".pub", ${JSON.stringify(`${buildOpenSshLine(kp, "walleterm")}
+`)}, "utf8");
+`,
+      "utf8",
+    );
+    chmodSync(sshKeygenBin, 0o755);
+    writeFileSync(sshAddBin, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
+    chmodSync(sshAddBin, 0o755);
+
+    const previousSock = process.env.SSH_AUTH_SOCK;
+    const previousHome = process.env.HOME;
+    const previousPath = process.env.PATH;
+    const previousKeygen = process.env.WALLETERM_SSH_KEYGEN_BIN;
+    const previousAdd = process.env.WALLETERM_SSH_ADD_BIN;
+    process.env.SSH_AUTH_SOCK = fx.socketPath;
+    process.env.HOME = fakeHome;
+    process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+    delete process.env.WALLETERM_SSH_KEYGEN_BIN;
+    delete process.env.WALLETERM_SSH_ADD_BIN;
+
+    try {
+      const result = await generateSshAgentKeySystem({ backend: "system" });
+      expect(result.key_path).toBe(defaultKeyPath);
+      expect(result.public_key_path).toBe(`${defaultKeyPath}.pub`);
+    } finally {
+      if (previousSock === undefined) delete process.env.SSH_AUTH_SOCK;
+      else process.env.SSH_AUTH_SOCK = previousSock;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousKeygen === undefined) delete process.env.WALLETERM_SSH_KEYGEN_BIN;
+      else process.env.WALLETERM_SSH_KEYGEN_BIN = previousKeygen;
+      if (previousAdd === undefined) delete process.env.WALLETERM_SSH_ADD_BIN;
+      else process.env.WALLETERM_SSH_ADD_BIN = previousAdd;
+    }
+  });
+
+  it("generateSshAgentKey dispatches supported backends and rejects unsupported ones", async () => {
+    const kp = Keypair.random();
+    const fx = await makeFakeSshAgentFixture(kp);
+    cleanups.push(fx.cleanup);
+
+    const root = makeTempDir("walleterm-generate-wrapper-");
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const sshKeygenBin = join(binDir, "ssh-keygen");
+    const sshAddBin = join(binDir, "ssh-add");
+    const keyPath = join(root, "wrapper_ed25519");
+
+    writeFileSync(
+      sshKeygenBin,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = process.argv[process.argv.indexOf("-f") + 1];
+fs.mkdirSync(require("node:path").dirname(path), { recursive: true });
+fs.writeFileSync(path, "PRIVATE", { mode: 0o600 });
+fs.writeFileSync(path + ".pub", ${JSON.stringify(`${buildOpenSshLine(kp, "walleterm")}\n`)}, "utf8");
+`,
+      "utf8",
+    );
+    chmodSync(sshKeygenBin, 0o755);
+    writeFileSync(sshAddBin, "#!/usr/bin/env node\nprocess.exit(0);\n", "utf8");
+    chmodSync(sshAddBin, 0o755);
+
+    const previousSock = process.env.SSH_AUTH_SOCK;
+    process.env.SSH_AUTH_SOCK = fx.socketPath;
+    try {
+      const result = await generateSshAgentKey({
+        backend: "system",
+        keyPath,
+        sshKeygenBin,
+        sshAddBin,
+      });
+      expect(result.backend).toBe("system");
+    } finally {
+      if (previousSock === undefined) delete process.env.SSH_AUTH_SOCK;
+      else process.env.SSH_AUTH_SOCK = previousSock;
+    }
+
+    await expect(
+      generateSshAgentKey({ backend: "custom" as "system", socketPath: "/tmp/agent.sock" }),
+    ).rejects.toThrow(/Key generation is not supported for backend 'custom'/);
+  });
 });
+
+function buildOpenSshLine(keypair: Keypair, comment: string): string {
+  return `${"ssh-ed25519"} ${buildKeyBlob(Buffer.from(keypair.rawPublicKey())).toString("base64")} ${comment}`;
+}
+
+function buildKeyBlob(pubkey: Buffer): Buffer {
+  return Buffer.concat([writeString("ssh-ed25519"), writeString(pubkey)]);
+}
+
+function writeString(data: Buffer | string): Buffer {
+  const bytes = typeof data === "string" ? Buffer.from(data) : data;
+  return Buffer.concat([writeUint32(bytes.length), bytes]);
+}

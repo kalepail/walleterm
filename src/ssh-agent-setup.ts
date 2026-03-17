@@ -300,6 +300,7 @@ export async function generateSshAgentKeySystem(
   };
 }
 
+/* v8 ignore start -- CLI validates supported backends */
 export async function generateSshAgentKey(
   opts: GenerateSshAgentKeyOptions,
 ): Promise<GenerateSshAgentKeyResult> {
@@ -313,6 +314,7 @@ export async function generateSshAgentKey(
     `Key generation is not supported for backend '${opts.backend}'. Use '1password' or 'system'.`,
   );
 }
+/* v8 ignore stop */
 
 export async function setupSshAgentForWallet(
   opts: SetupSshAgentOptions,

@@ -41,6 +41,9 @@ Live test commands:
 bun run test:live
 bun run test:live:op
 bun run test:live:keychain
+bun run test:live:ssh-agent
+bun run test:live:ssh-agent:1p
+bun run test:live:ssh-agent:system
 bun run test:live:all
 ```
 
@@ -64,6 +67,7 @@ Or run with `op run --`.
 If you want the smallest useful command set, start with:
 - `setup op`
 - `setup keychain`
+- `setup ssh-agent`
 - `wallet lookup`
 - `wallet signer`
 - `wallet create`
@@ -241,6 +245,39 @@ bun src/cli.ts setup keychain \
   --network mainnet \
   --json
 ```
+
+### SSH agent setup and generation
+
+Discover Ed25519 keys already loaded in an SSH agent:
+
+```bash
+bun src/cli.ts setup ssh-agent --backend system --json
+bun src/cli.ts setup ssh-agent --backend 1password --json
+```
+
+Generate and register a new SSH-backed signer:
+
+```bash
+bun src/cli.ts setup ssh-agent \
+  --backend system \
+  --generate \
+  --key-path ~/.ssh/walleterm_ed25519 \
+  --json
+
+bun src/cli.ts setup ssh-agent \
+  --backend 1password \
+  --generate \
+  --vault Private \
+  --title walleterm-ed25519 \
+  --json
+```
+
+Notes:
+- `--backend custom --socket <path>` is supported for discovery against nonstandard agent sockets.
+- `--generate` currently supports `system` and `1password` backends only.
+- System generation uses `ssh-keygen` and `ssh-add`, and expects the generated key to become visible in the target agent.
+- 1Password generation creates an `SSH Key` item, appends an `[[ssh-keys]]` block to `~/.config/1Password/ssh/agent.toml` by default, and polls briefly for the key to appear in the agent.
+- Returned `secret_ref` values use the `ssh-agent://...` scheme and can be placed directly in delegated signer config.
 
 ### Wallet discovery and signer inspection
 
@@ -431,6 +468,19 @@ Run full suite including live on-chain/indexer checks:
 ```bash
 WALLETERM_LIVE=1 bun run test
 ```
+
+Run SSH-agent live coverage by backend:
+
+```bash
+bun run test:live:ssh-agent
+bun run test:live:ssh-agent:1p
+bun run test:live:ssh-agent:system
+```
+
+SSH-agent live prerequisites:
+- `test:live:ssh-agent` expects a reachable system SSH agent via `SSH_AUTH_SOCK` with at least one Ed25519 key loaded.
+- `test:live:ssh-agent:1p` additionally expects 1Password CLI sign-in and the 1Password SSH agent to be enabled.
+- `test:live:ssh-agent:system` generates a temporary key file, adds it to the system agent, deploys a wallet, signs a payment, and verifies the result on-chain.
 
 Run real 1Password + testnet wallet-create live test:
 

@@ -276,6 +276,37 @@ describe("wallet unit", () => {
     expect(parsed.switch().name).toBe("envelopeTypeTxFeeBump");
   });
 
+  it("sorts external signers deterministically during reconciliation", () => {
+    const reconciliation = reconcileContractSigners(
+      {
+        network: "testnet",
+        contract_id: "CABC",
+        delegated_signers: [],
+        external_signers: [
+          {
+            name: "b",
+            verifier_contract_id: "CVERB",
+            public_key_hex: "bb".repeat(32),
+            secret_ref: "op://b",
+          },
+          {
+            name: "a",
+            verifier_contract_id: "CVERA",
+            public_key_hex: "aa".repeat(32),
+            secret_ref: "op://a",
+          },
+        ],
+      },
+      [],
+      "subset",
+    );
+
+    expect(reconciliation.configured.external).toEqual([
+      { verifier_contract_id: "CVERA", public_key_hex: "aa".repeat(32) },
+      { verifier_contract_id: "CVERB", public_key_hex: "bb".repeat(32) },
+    ]);
+  });
+
   it("surfaces indexer non-200 responses for discovery endpoints", async () => {
     const server = createServer((_, res) => {
       res.statusCode = 500;
@@ -294,6 +325,24 @@ describe("wallet unit", () => {
       /Indexer request failed/i,
     );
     await expect(listContractSigners(base, "CABC")).rejects.toThrow(/Indexer request failed/i);
+
+    await new Promise<void>((resolve, reject) =>
+      server.close((err) => (err ? reject(err) : resolve())),
+    );
+  });
+
+  it("surfaces schema parse failures from indexer responses", async () => {
+    const server = createServer((_, res) => {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ wrong: true }));
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const addr = server.address();
+    if (!addr || typeof addr === "string") throw new Error("server failed to bind");
+    const base = `http://127.0.0.1:${addr.port}`;
+
+    await expect(discoverContractsByAddress(base, "GABC")).rejects.toThrow();
 
     await new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve())),
@@ -403,6 +452,93 @@ describe("wallet unit", () => {
         verifier_contract_id: account.external_signers[0]!.verifier_contract_id,
         public_key_hex: account.external_signers[0]!.public_key_hex.toLowerCase(),
       },
+    ]);
+  });
+
+  it("reconciles exact mode successfully when config and onchain signers match", () => {
+    const delegated = Keypair.random().publicKey();
+    const verifier = StrKey.encodeContract(Buffer.alloc(32, 7));
+    const publicKeyHex = Buffer.from(Keypair.random().rawPublicKey()).toString("hex");
+
+    const reconciliation = reconcileContractSigners(
+      {
+        network: "testnet",
+        contract_id: StrKey.encodeContract(Buffer.alloc(32, 9)),
+        delegated_signers: [{ name: "del", address: delegated, secret_ref: "op://del" }],
+        external_signers: [
+          {
+            name: "ext",
+            verifier_contract_id: verifier,
+            public_key_hex: publicKeyHex,
+            secret_ref: "op://ext",
+          },
+        ],
+      },
+      [
+        {
+          context_rule_id: 0,
+          signer_type: "Delegated",
+          signer_address: delegated,
+          credential_id: null,
+        },
+        {
+          context_rule_id: 0,
+          signer_type: "External",
+          signer_address: verifier,
+          credential_id: publicKeyHex,
+        },
+      ],
+      "exact",
+    );
+
+    expect(reconciliation.ok).toBe(true);
+    expect(reconciliation.extra.delegated).toEqual([]);
+    expect(reconciliation.extra.external).toEqual([]);
+  });
+
+  it("handles omitted signer arrays and exact-mode extra signers", () => {
+    const extraDelegated = Keypair.random().publicKey();
+    const extraVerifier = StrKey.encodeContract(Buffer.alloc(32, 5));
+    const extraPublicKey = "aa".repeat(32);
+
+    const empty = reconcileContractSigners(
+      {
+        network: "testnet",
+        contract_id: "CABC",
+      },
+      [],
+      "subset",
+    );
+    expect(empty.ok).toBe(true);
+    expect(empty.configured.delegated).toEqual([]);
+    expect(empty.configured.external).toEqual([]);
+
+    const exactWithExtras = reconcileContractSigners(
+      {
+        network: "testnet",
+        contract_id: "CABC",
+      },
+      [
+        {
+          context_rule_id: 0,
+          signer_type: "Delegated",
+          signer_address: extraDelegated,
+          credential_id: null,
+        },
+        {
+          context_rule_id: 0,
+          signer_type: "External",
+          signer_address: extraVerifier,
+          credential_id: extraPublicKey,
+        },
+      ],
+      "exact",
+    );
+
+    expect(exactWithExtras.ok).toBe(false);
+    expect(exactWithExtras.extra.delegated).toEqual([extraDelegated]);
+    expect(exactWithExtras.extra.external).toEqual([
+      { verifier_contract_id: extraVerifier, public_key_hex: extraPublicKey },
     ]);
   });
 });

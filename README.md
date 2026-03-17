@@ -53,6 +53,13 @@ If using the macOS keychain:
 bun run cli setup keychain --network testnet
 ```
 
+If using SSH-agent-backed signers:
+
+```bash
+bun run cli setup ssh-agent --backend system --json
+bun run cli setup ssh-agent --backend system --generate --key-path ~/.ssh/walleterm_ed25519 --json
+```
+
 Then update `walleterm.toml` with your real contract IDs and signer configuration.
 
 The simplest mental model is:
@@ -166,6 +173,7 @@ bun run cli wallet signer --help
 bun run cli pay --help
 bun run cli setup op --help
 bun run cli setup keychain --help
+bun run cli setup ssh-agent --help
 ```
 
 ## Testing
@@ -174,6 +182,9 @@ bun run cli setup keychain --help
 bun run test
 bun run test:live
 bun run test:live:op
+bun run test:live:ssh-agent
+bun run test:live:ssh-agent:1p
+bun run test:live:ssh-agent:system
 bun run test:live:all
 ```
 

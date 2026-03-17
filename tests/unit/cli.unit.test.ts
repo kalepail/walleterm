@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Keypair, Networks, StrKey } from "@stellar/stellar-sdk";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 
 const mocks = {
   mockCanSignInput: vi.fn(),
@@ -19,6 +19,8 @@ const mocks = {
   mockSetupMacOSKeychainForWallet: vi.fn(),
   mockDefaultItemForNetwork: vi.fn(),
   mockSetupOnePasswordForWallet: vi.fn(),
+  mockGenerateSshAgentKey: vi.fn(),
+  mockSetupSshAgentForWallet: vi.fn(),
   mockSubmitTxXdrViaRpc: vi.fn(),
   mockSubmitViaChannels: vi.fn(),
   mockBuildSignerMutationBundle: vi.fn(),
@@ -51,6 +53,8 @@ const {
   mockSetupMacOSKeychainForWallet,
   mockDefaultItemForNetwork,
   mockSetupOnePasswordForWallet,
+  mockGenerateSshAgentKey,
+  mockSetupSshAgentForWallet,
   mockSubmitTxXdrViaRpc,
   mockSubmitViaChannels,
   mockBuildSignerMutationBundle,
@@ -93,6 +97,11 @@ vi.mock("../../src/keychain-setup.js", () => ({
 vi.mock("../../src/op-setup.js", () => ({
   defaultItemForNetwork: mocks.mockDefaultItemForNetwork,
   setupOnePasswordForWallet: mocks.mockSetupOnePasswordForWallet,
+}));
+
+vi.mock("../../src/ssh-agent-setup.js", () => ({
+  generateSshAgentKey: mocks.mockGenerateSshAgentKey,
+  setupSshAgentForWallet: mocks.mockSetupSshAgentForWallet,
 }));
 
 vi.mock("../../src/submit.js", () => ({
@@ -298,6 +307,32 @@ beforeEach(() => {
     },
     config_snippet: "[networks.testnet]",
   });
+  mockGenerateSshAgentKey.mockResolvedValue({
+    backend: "system",
+    socket_path: "/tmp/agent.sock",
+    generated: true,
+    key: {
+      stellar_address: Keypair.random().publicKey(),
+      public_key_hex: "11".repeat(32),
+      comment: "generated",
+      ref: "ssh-agent://system/GTEST",
+    },
+    config_snippet: "[[smart_accounts.<alias>.delegated_signers]]",
+    key_path: "/tmp/test_ed25519",
+  });
+  mockSetupSshAgentForWallet.mockResolvedValue({
+    backend: "system",
+    socket_path: "/tmp/agent.sock",
+    keys: [
+      {
+        stellar_address: Keypair.random().publicKey(),
+        public_key_hex: "22".repeat(32),
+        comment: "fixture",
+        ref: "ssh-agent://system/GFIXTURE",
+      },
+    ],
+    config_snippet: "[[smart_accounts.<alias>.delegated_signers]]",
+  });
 
   mockSubmitTxXdrViaRpc.mockResolvedValue({ hash: "txhash" });
   mockSubmitViaChannels.mockResolvedValue({ mode: "channels", ok: true });
@@ -366,6 +401,56 @@ describe("cli unit", () => {
     });
   });
 
+  it("review defaults signer reconciliation mode to subset when config omits it", async () => {
+    mockLoadConfig.mockImplementation(() => ({
+      app: {
+        default_network: "testnet",
+        strict_onchain: true,
+        onchain_signer_mode: undefined,
+        default_ttl_seconds: 30,
+        assumed_ledger_time_seconds: 6,
+        default_submit_mode: "sign-only",
+      },
+      networks: {
+        testnet: {
+          rpc_url: "https://rpc.invalid",
+          network_passphrase: Networks.TESTNET,
+        },
+      },
+      smart_accounts: {
+        treasury: {
+          network: "testnet",
+          contract_id: CONTRACT_ID,
+          external_signers: [],
+          delegated_signers: [],
+        },
+      },
+    }));
+
+    const res = await run(["review", "--in", "in.txt", "--account", "treasury"]);
+    expect(JSON.parse(res.stdout)).toMatchObject({
+      signer_reconciliation: expect.objectContaining({ ok: true, mode: "subset" }),
+      signer_reconciliation_error: null,
+    });
+    expect(mockReconcileContractSigners).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "subset",
+    );
+  });
+
+  it("review stringifies non-Error signer reconciliation failures", async () => {
+    mockResolveIndexerUrl.mockImplementationOnce(() => {
+      throw "plain-failure";
+    });
+
+    const res = await run(["review", "--in", "in.txt", "--account", "treasury"]);
+    expect(JSON.parse(res.stdout)).toMatchObject({
+      signer_reconciliation: null,
+      signer_reconciliation_error: "plain-failure",
+    });
+  });
+
   it("review command falls back to inspection-only output when no account resolves", async () => {
     mockParseInputFile.mockReturnValue({ kind: "bundle", auth: [] });
     mockInspectInput.mockReturnValue({ kind: "bundle", operations: 1 });
@@ -382,6 +467,35 @@ describe("cli unit", () => {
   it("runCli stringifies non-Error parse failures", async () => {
     vi.spyOn(Command.prototype, "parseAsync").mockRejectedValueOnce("plain-failure");
     await expect(run(["review", "--in", "in.txt"])).rejects.toThrow(/plain-failure/i);
+  });
+
+  it("runCli ignores Commander help exits", async () => {
+    const { runCli } = await import("../../src/cli.js");
+    vi.spyOn(Command.prototype, "parseAsync").mockRejectedValueOnce(
+      new CommanderError(0, "commander.help", "help"),
+    );
+
+    await expect(runCli(["bun", "walleterm", "--help"])).resolves.toBeUndefined();
+  });
+
+  it("runCli writes stderr and exitCode when throw-on-error is disabled", async () => {
+    const { runCli } = await import("../../src/cli.js");
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const prev = process.env.WALLETERM_THROW_ON_CLI_ERROR;
+    delete process.env.WALLETERM_THROW_ON_CLI_ERROR;
+    process.exitCode = 0;
+    vi.spyOn(Command.prototype, "parseAsync").mockRejectedValueOnce(new Error("plain failure"));
+
+    try {
+      await runCli(["bun", "walleterm", "review", "--in", "in.txt"]);
+      expect(stderrSpy).toHaveBeenCalledWith("plain failure\n");
+      expect(process.exitCode).toBe(1);
+    } finally {
+      if (prev === undefined) delete process.env.WALLETERM_THROW_ON_CLI_ERROR;
+      else process.env.WALLETERM_THROW_ON_CLI_ERROR = prev;
+      stderrSpy.mockRestore();
+      process.exitCode = 0;
+    }
   });
 
   it("sign command errors when account cannot be resolved", async () => {
@@ -405,6 +519,21 @@ describe("cli unit", () => {
 
     await expect(run(["sign", "--in", "in.txt", "--out", "out.txt"])).rejects.toThrow(
       /Strict on-chain signer reconciliation failed/i,
+    );
+  });
+
+  it("sign command includes extra signer details in exact reconciliation mode", async () => {
+    mockReconcileContractSigners.mockReturnValueOnce({
+      mode: "exact",
+      ok: false,
+      configured: { delegated: [], external: [] },
+      onchain: { delegated: [], external: [{ verifier_contract_id: CONTRACT_ID, public_key_hex: "aa".repeat(32) }] },
+      missing: { delegated: [], external: [] },
+      extra: { delegated: [], external: [{ verifier_contract_id: CONTRACT_ID, public_key_hex: "aa".repeat(32) }] },
+    });
+
+    await expect(run(["sign", "--in", "in.txt", "--out", "out.txt"])).rejects.toThrow(
+      /extra external=\[/i,
     );
   });
 
@@ -549,6 +678,66 @@ describe("cli unit", () => {
         includeDeployerSeed: true,
       }),
     );
+  });
+
+  it("setup ssh-agent discovery prints verbose output and supports json", async () => {
+    const res = await run(["setup", "ssh-agent", "--backend", "system", "--socket", "/tmp/custom.sock"]);
+
+    expect(mockSetupSshAgentForWallet).toHaveBeenCalledWith({
+      backend: "system",
+      socketPath: "/tmp/custom.sock",
+    });
+    expect(res.stderr).toContain("SSH agent discovery complete (system).");
+    expect(res.stderr).toContain("found 1 Ed25519 key(s)");
+    expect(JSON.parse(res.stdout)).toMatchObject({ backend: "system" });
+  });
+
+  it("setup ssh-agent generate forwards backend-specific options", async () => {
+    const res = await run([
+      "setup",
+      "ssh-agent",
+      "--backend",
+      "1password",
+      "--generate",
+      "--vault",
+      "Private",
+      "--title",
+      "walleterm-generated",
+      "--socket",
+      "/tmp/1p.sock",
+      "--json",
+    ]);
+
+    expect(mockGenerateSshAgentKey).toHaveBeenCalledWith({
+      backend: "1password",
+      socketPath: "/tmp/1p.sock",
+      vault: "Private",
+      title: "walleterm-generated",
+      keyPath: undefined,
+    });
+    expect(JSON.parse(res.stdout)).toMatchObject({ generated: true, backend: "system" });
+  });
+
+  it("setup ssh-agent generate prints verbose output for system backend", async () => {
+    mockGenerateSshAgentKey.mockResolvedValueOnce({
+      backend: "system",
+      socket_path: "/tmp/agent.sock",
+      generated: true,
+      key: {
+        stellar_address: Keypair.random().publicKey(),
+        public_key_hex: "33".repeat(32),
+        comment: "generated",
+        ref: "ssh-agent://system/GGENERATED",
+      },
+      config_snippet: "[[smart_accounts.<alias>.delegated_signers]]",
+      key_path: "/tmp/test_ed25519",
+      public_key_path: "/tmp/test_ed25519.pub",
+    });
+
+    const res = await run(["setup", "ssh-agent", "--backend", "system", "--generate"]);
+    expect(res.stderr).toContain("SSH agent key generated (system).");
+    expect(res.stderr).toContain("key_path: /tmp/test_ed25519");
+    expect(JSON.parse(res.stdout)).toMatchObject({ generated: true });
   });
 
   it("wallet signer generate outputs a valid keypair", async () => {
@@ -1262,6 +1451,46 @@ describe("cli unit", () => {
     expect(mockCreateWalletDeployTx).toHaveBeenCalledWith(
       expect.objectContaining({ wasmHashHex: WASM_HASH }),
     );
+  });
+
+  it("wallet create rejects missing wasm hash when no explicit or configured value exists", async () => {
+    mockResolveAccount.mockReturnValue(null);
+
+    await expect(
+      run([
+        "wallet",
+        "create",
+        "--delegated-address",
+        Keypair.random().publicKey(),
+        "--out",
+        "out.xdr",
+      ]),
+    ).rejects.toThrow(/No wasm hash provided\. Pass --wasm-hash or select\/configure an account/i);
+  });
+
+  it("wallet create rejects missing wasm hash for selected account without expected_wasm_hash", async () => {
+    mockResolveAccount.mockReturnValue({
+      alias: "treasury",
+      account: {
+        network: "testnet",
+        contract_id: CONTRACT_ID,
+        external_signers: [],
+        delegated_signers: [],
+      },
+    });
+
+    await expect(
+      run([
+        "wallet",
+        "create",
+        "--account",
+        "treasury",
+        "--delegated-address",
+        Keypair.random().publicKey(),
+        "--out",
+        "out.xdr",
+      ]),
+    ).rejects.toThrow(/No wasm hash provided\. Pass --wasm-hash or set smart_accounts\.treasury\.expected_wasm_hash/i);
   });
 
   it("wallet create rejects mismatched expected_wasm_hash and auto-submits when default_submit_mode is channels", async () => {

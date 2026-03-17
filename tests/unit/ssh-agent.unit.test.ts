@@ -395,6 +395,22 @@ describe("listAgentIdentities", () => {
       /Unexpected SSH agent response type: 99/,
     );
   });
+
+  it("wraps malformed identity responses that break top-level parsing", async () => {
+    const SSH2_AGENT_IDENTITIES_ANSWER = 12;
+    const body = Buffer.concat([
+      Buffer.from([SSH2_AGENT_IDENTITIES_ANSWER]),
+      writeUint32(1),
+      Buffer.from([0x00]),
+    ]);
+
+    const mock = await makeFixedReplyServer(frameResponse(body));
+    pendingCleanups.push(mock.cleanup);
+
+    await expect(listAgentIdentities(mock.socketPath)).rejects.toThrow(
+      /Malformed SSH agent identities response/,
+    );
+  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -542,6 +558,22 @@ describe("agentSign error paths", () => {
     const keyBlob = buildEd25519KeyBlob(Buffer.from(Keypair.random().rawPublicKey()));
     await expect(agentSign(mock.socketPath, keyBlob, Buffer.from("data"))).rejects.toThrow(
       /Unexpected Ed25519 signature length: 32/,
+    );
+  });
+
+  it("wraps malformed sign responses that break top-level parsing", async () => {
+    const SSH2_AGENT_SIGN_RESPONSE = 14;
+    const body = Buffer.concat([
+      Buffer.from([SSH2_AGENT_SIGN_RESPONSE]),
+      Buffer.from([0x00]),
+    ]);
+
+    const mock = await makeFixedReplyServer(frameResponse(body));
+    pendingCleanups.push(mock.cleanup);
+
+    const keyBlob = buildEd25519KeyBlob(Buffer.from(Keypair.random().rawPublicKey()));
+    await expect(agentSign(mock.socketPath, keyBlob, Buffer.from("data"))).rejects.toThrow(
+      /Malformed SSH agent sign response/,
     );
   });
 });

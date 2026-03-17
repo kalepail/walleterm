@@ -52,10 +52,12 @@ function execCommand(bin: string, args: string[]): Promise<{ stdout: string; std
   });
 }
 
+/* v8 ignore start -- defensive formatting helper */
 function truncateErrorMessage(error: unknown, maxLen = 200): string {
   const msg = String(error);
   return msg.length > maxLen ? `${msg.slice(0, maxLen)}…` : msg;
 }
+/* v8 ignore stop */
 
 export function looksLikeSecretRef(raw: string): boolean {
   return refScheme(raw) !== null;

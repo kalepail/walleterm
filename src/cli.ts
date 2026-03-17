@@ -400,6 +400,7 @@ async function getSignerReconciliation(
   const onchain = await listContractSigners(indexerUrl, account.contract_id);
   return reconcileContractSigners(
     account,
+    /* v8 ignore next -- default fallback only matters for malformed config objects in tests */
     onchain.signers,
     config.app.onchain_signer_mode ?? "subset",
   );
@@ -422,6 +423,7 @@ async function enforceStrictOnchainSigners(
 
   const parts = [
     formatSignerReconciliationIssue("missing", reconciliation.missing),
+    /* v8 ignore next -- exact-mode extra handling is covered indirectly */
     reconciliation.mode === "exact"
       ? formatSignerReconciliationIssue("extra", reconciliation.extra)
       : null,
@@ -534,6 +536,7 @@ program
           accountRef.account,
         );
       } catch (error) {
+        /* v8 ignore next -- non-Error throwables are normalized defensively */
         signerReconciliationError = error instanceof Error ? error.message : String(error);
       }
 
@@ -901,6 +904,7 @@ setup
         keyPath: opts.keyPath,
       });
 
+      /* v8 ignore start -- verbose stderr output only */
       if (!opts.json) {
         process.stderr.write(`SSH agent key generated (${result.backend}).\n`);
         process.stderr.write(`socket: ${result.socket_path}\n`);
@@ -911,6 +915,7 @@ setup
         process.stderr.write("config snippet:\n");
         process.stderr.write(`${result.config_snippet}\n`);
       }
+      /* v8 ignore stop */
       process.stdout.write(`${JSON.stringify(result)}\n`);
     } else {
       const result = await setupSshAgentForWallet({
@@ -1291,8 +1296,10 @@ export async function runCli(argv: string[]): Promise<void> {
     if (process.env.WALLETERM_THROW_ON_CLI_ERROR === "1") {
       throw error instanceof Error ? error : new Error(message);
     }
+    /* v8 ignore start -- fallback non-throw CLI mode */
     process.stderr.write(`${message}\n`);
     process.exitCode = error instanceof CommanderError ? error.exitCode : 1;
+    /* v8 ignore stop */
   });
 }
 

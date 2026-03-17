@@ -260,6 +260,68 @@ process.exit(1);
     ).rejects.toThrow(/failed:/i);
   });
 
+  it("argsWithOptionalKeychain leaves args unchanged when keychain is omitted", async () => {
+    const { securityBin, logPath } = makeSecurityBin();
+    process.env.WALLETERM_SECURITY_LOG_PATH = logPath;
+
+    await setupMacOSKeychainForWallet({
+      securityBin,
+      service: "walleterm-testnet",
+      network: "testnet",
+      channelsApiKey: "manual-key",
+      overwriteExisting: true,
+    });
+
+    const log = readFileSync(logPath, "utf8").trim().split("\n");
+    expect(log[0]).not.toContain("keychain-db");
+  });
+
+  it("parseSeed rejects invalid deployer seeds", async () => {
+    const { securityBin } = makeSecurityBin();
+    await expect(
+      setupMacOSKeychainForWallet({
+        securityBin,
+        service: "walleterm-testnet",
+        network: "testnet",
+        channelsApiKey: "manual-key",
+        overwriteExisting: true,
+        includeDeployerSeed: true,
+        deployerSeed: "not-a-seed",
+      }),
+    ).rejects.toThrow(/deployer seed must be a valid Stellar secret seed/i);
+  });
+
+  it("resolveChannelsApiKey surfaces generator failure and missing apiKey", async () => {
+    const { securityBin } = makeSecurityBin();
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("{}", { status: 503 }),
+    );
+    await expect(
+      setupMacOSKeychainForWallet({
+        securityBin,
+        service: "walleterm-testnet",
+        network: "testnet",
+        overwriteExisting: true,
+      }),
+    ).rejects.toThrow(/Failed to generate channels API key/);
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await expect(
+      setupMacOSKeychainForWallet({
+        securityBin,
+        service: "walleterm-testnet",
+        network: "testnet",
+        overwriteExisting: true,
+      }),
+    ).rejects.toThrow(/did not include apiKey/);
+  });
+
   it("networkDefaults: testnet config snippet contains testnet URLs", async () => {
     const { securityBin, logPath } = makeSecurityBin();
     process.env.WALLETERM_SECURITY_LOG_PATH = logPath;

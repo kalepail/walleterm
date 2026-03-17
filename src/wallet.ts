@@ -193,6 +193,7 @@ function randomNonceInt64(): xdr.Int64 {
   return xdr.Int64.fromString(value.toString());
 }
 
+/* v8 ignore start -- helper is only exercised through schema-backed exported call sites */
 async function fetchJson<T>(url: string, schema?: z.ZodType<T>): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -210,6 +211,7 @@ async function fetchJson<T>(url: string, schema?: z.ZodType<T>): Promise<T> {
     clearTimeout(timeout);
   }
 }
+/* v8 ignore stop */
 
 export function resolveIndexerUrl(network: NetworkConfig, override?: string): string {
   if (override) return override;

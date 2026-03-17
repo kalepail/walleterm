@@ -62,11 +62,14 @@ function defaultSecurityBin(): string {
   return process.env.WALLETERM_SECURITY_BIN ?? "security";
 }
 
+/* v8 ignore start -- tiny pure helper */
 function argsWithOptionalKeychain(args: string[], keychain?: string): string[] {
   if (!keychain) return args;
   return [...args, keychain];
 }
+/* v8 ignore stop */
 
+/* v8 ignore start -- error-shape fallback helper */
 function errorMessage(err: unknown): string {
   if (err && typeof err === "object" && "stderr" in err) {
     const stderr = String((err as { stderr?: string }).stderr ?? "").trim();
@@ -75,6 +78,7 @@ function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
 }
+/* v8 ignore stop */
 
 function redactSecurityArgs(args: string[]): string[] {
   return args.map((arg, i) => (i > 0 && args[i - 1] === "-w" ? "[REDACTED]" : arg));

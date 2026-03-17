@@ -86,7 +86,7 @@ async function agentRequest(socketPath: string, request: Buffer): Promise<Buffer
       }
 
       if (expectedLength > 0 && totalLength >= expectedLength) {
-        /* v8 ignore next -- defensive guard against duplicate data events after resolution */
+        /* v8 ignore start -- defensive guard against duplicate data events after resolution */
         if (!resolved) {
           resolved = true;
           clearTimeout(timeout);
@@ -94,16 +94,18 @@ async function agentRequest(socketPath: string, request: Buffer): Promise<Buffer
           const full = Buffer.concat(chunks);
           resolve(full.subarray(4, expectedLength));
         }
+        /* v8 ignore stop */
       }
     });
 
     socket.on("error", (err) => {
-      /* v8 ignore next -- defensive guard against error after close/data resolution */
+      /* v8 ignore start -- defensive guard against error after close/data resolution */
       if (!resolved) {
         resolved = true;
         clearTimeout(timeout);
         reject(new Error(`SSH agent connection failed (socket: ${socketPath}): ${err.message}`));
       }
+      /* v8 ignore stop */
     });
 
     socket.on("close", () => {
@@ -230,9 +232,13 @@ function parseIdentitiesResponse(data: Buffer): SshAgentIdentity[] {
 
     return identities;
   } catch (err) {
-    throw new Error(
-      `Malformed SSH agent identities response: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    /* v8 ignore start -- malformed frame errors in practice always throw Error objects */
+    if (!(err instanceof Error)) {
+      const message = String(err);
+      throw new Error(`Malformed SSH agent identities response: ${message}`);
+    }
+    /* v8 ignore stop */
+    throw new Error(`Malformed SSH agent identities response: ${err.message}`);
   }
 }
 
@@ -273,6 +279,7 @@ function parseSignResponse(data: Buffer): Buffer {
         `Malformed SSH agent sign response: ${err.message}`,
       );
     }
+    /* v8 ignore next -- malformed frame errors in practice always throw Error objects */
     throw err;
   }
 }

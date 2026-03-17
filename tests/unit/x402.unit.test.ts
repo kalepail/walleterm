@@ -288,4 +288,39 @@ describe("executeX402Request", () => {
     expect(retryHeaders["Authorization"]).toBe("Bearer token");
     expect(retryHeaders["PAYMENT-SIGNATURE"]).toBe("base64encodedpayload");
   });
+
+  it("enforces max payment amount unless --yes is passed", async () => {
+    const handler = makeMockHandler({
+      getPaymentRequiredResponse: vi.fn(() => makePaymentRequired("stellar:testnet", "exact")),
+    });
+    const fetchFn = mockFetch(402, "{}", { "PAYMENT-REQUIRED": "base64stuff" });
+
+    await expect(
+      executeX402Request(handler, {
+        url: "https://example.com/resource",
+        x402Network: "stellar:testnet" as Network,
+        maxPaymentAmount: "99999",
+        fetchFn,
+      }),
+    ).rejects.toThrow(/exceeds configured max_payment_amount/);
+
+    let callCount = 0;
+    const yesFetch = vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) return new Response("{}", { status: 402 });
+      return new Response("paid", {
+        status: 200,
+        headers: { "PAYMENT-RESPONSE": "base64settle" },
+      });
+    });
+
+    const result = await executeX402Request(handler, {
+      url: "https://example.com/resource",
+      x402Network: "stellar:testnet" as Network,
+      maxPaymentAmount: "99999",
+      yes: true,
+      fetchFn: yesFetch,
+    });
+    expect(result.paid).toBe(true);
+  });
 });

@@ -52,6 +52,13 @@ process.exit(1);
     delete process.env.WALLETERM_COUNT_PATH;
   });
 
+  it("looksLikeSecretRef detects refs with schemes", async () => {
+    const { looksLikeSecretRef } = await import("../../src/secrets.js");
+    expect(looksLikeSecretRef("op://vault/item/field")).toBe(true);
+    expect(looksLikeSecretRef("ssh-agent://system/GABC")).toBe(true);
+    expect(looksLikeSecretRef("plain-string")).toBe(false);
+  });
+
   it("rejects non-op refs", async () => {
     const resolver = new SecretResolver("op");
     await expect(resolver.resolve("env://not-supported")).rejects.toThrow(
@@ -68,6 +75,11 @@ process.exit(1);
     await expect(resolver.resolve("op://vault/item/field")).rejects.toThrow(
       /Failed resolving 1Password ref/i,
     );
+  });
+
+  it("rejects malformed op refs with the wrong number of segments", async () => {
+    const resolver = new SecretResolver("op");
+    await expect(resolver.resolve("op://vault/item")).rejects.toThrow(/expected format op:\/\//i);
   });
 
   it("rejects empty resolved values", async () => {
@@ -245,6 +257,11 @@ process.exit(1);
     expect(isSshAgentRef("op://vault/item/field")).toBe(false);
     expect(isSshAgentRef("keychain://service/account")).toBe(false);
     expect(isSshAgentRef("not-a-ref")).toBe(false);
+  });
+
+  it("parseKeychainSecretRef rejects wrong schemes and malformed paths", () => {
+    expect(() => parseKeychainSecretRef("op://vault/item/field")).toThrow(/Invalid keychain secret ref/i);
+    expect(() => parseKeychainSecretRef("keychain://service-only")).toThrow(/Expected keychain:\/\//i);
   });
 
   it("clearCache causes a second resolve to call the provider again", async () => {

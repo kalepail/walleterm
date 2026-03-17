@@ -261,6 +261,16 @@ contract_id = "CTESTACCOUNTA"
     );
   });
 
+  it("rejects NaN assumed_ledger_time_seconds", () => {
+    const cfg = BASE_CONFIG.replace(
+      "assumed_ledger_time_seconds = 6",
+      'assumed_ledger_time_seconds = "abc"',
+    );
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(
+      /app\.assumed_ledger_time_seconds must be a valid number/i,
+    );
+  });
+
   it("warns on non-HTTPS URLs (not localhost)", () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const cfg = `[app]
@@ -297,6 +307,24 @@ contract_id = "CTESTACCOUNTA"
     stderrSpy.mockRestore();
   });
 
+  it("does not warn when an http URL is malformed", () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const cfg = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "http://["
+network_passphrase = "Test SDF Network ; September 2015"
+
+[smart_accounts.a]
+network = "testnet"
+contract_id = "CTESTACCOUNTA"
+`;
+    loadConfig(writeConfig(cfg));
+    expect(stderrSpy).not.toHaveBeenCalledWith(expect.stringContaining("non-HTTPS URL"));
+    stderrSpy.mockRestore();
+  });
+
   it("loads x402 config section when present", () => {
     const cfg = `${BASE_CONFIG}
 [x402]
@@ -318,6 +346,31 @@ default_payer_secret_ref = "op://Private/testnet/payer_seed"
     const config = loadConfig(writeConfig(cfg));
     expect(config.x402).toBeDefined();
     expect(config.x402?.default_payer_secret_ref).toBeUndefined();
+  });
+
+  it("rejects invalid x402.max_payment_amount values", () => {
+    const cfg = `${BASE_CONFIG}
+[x402]
+max_payment_amount = "-1"
+`;
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(/max_payment_amount must be a valid non-negative/i);
+
+    const nanCfg = `${BASE_CONFIG}
+[x402]
+max_payment_amount = "nope"
+`;
+    expect(() => loadConfig(writeConfig(nanCfg))).toThrow(
+      /max_payment_amount must be a valid non-negative/i,
+    );
+  });
+
+  it("accepts valid non-negative x402.max_payment_amount values", () => {
+    const cfg = `${BASE_CONFIG}
+[x402]
+max_payment_amount = "0"
+`;
+    const config = loadConfig(writeConfig(cfg));
+    expect(config.x402?.max_payment_amount).toBe("0");
   });
 
   it("throws when x402 section is not a table", () => {
