@@ -719,8 +719,8 @@ describe("connection errors", () => {
       caughtError = err;
     });
 
-    // Advance past the 10-second timeout
-    await vi.advanceTimersByTimeAsync(11_000);
+    // Advance past the 30-second timeout
+    await vi.advanceTimersByTimeAsync(31_000);
 
     await promise;
     expect(caughtError).toBeDefined();
