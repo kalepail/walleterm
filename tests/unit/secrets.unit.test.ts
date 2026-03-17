@@ -5,6 +5,7 @@ import { makeTempDir } from "../helpers/temp-dir.js";
 import {
   SecretResolver,
   buildKeychainSecretRef,
+  isSshAgentRef,
   parseKeychainSecretRef,
 } from "../../src/secrets.js";
 
@@ -236,6 +237,14 @@ process.exit(1);
     await expect(resolver.resolve("just-a-string")).rejects.toThrow(
       /Unsupported secret_ref 'just-a-string'\. Expected a provider ref like/,
     );
+  });
+
+  it("isSshAgentRef identifies ssh-agent scheme refs", () => {
+    expect(isSshAgentRef("ssh-agent://system/GABC...")).toBe(true);
+    expect(isSshAgentRef("ssh-agent://1password/GABC...")).toBe(true);
+    expect(isSshAgentRef("op://vault/item/field")).toBe(false);
+    expect(isSshAgentRef("keychain://service/account")).toBe(false);
+    expect(isSshAgentRef("not-a-ref")).toBe(false);
   });
 
   it("clearCache causes a second resolve to call the provider again", async () => {

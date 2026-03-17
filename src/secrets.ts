@@ -61,6 +61,10 @@ export function looksLikeSecretRef(raw: string): boolean {
   return refScheme(raw) !== null;
 }
 
+export function isSshAgentRef(raw: string): boolean {
+  return refScheme(raw) === "ssh-agent";
+}
+
 export function parseKeychainSecretRef(raw: string): KeychainSecretRef {
   const scheme = refScheme(raw);
   if (scheme !== "keychain") {

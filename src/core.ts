@@ -9,21 +9,22 @@ import type {
   DelegatedSignerConfig,
 } from "./config.js";
 import { findAccountByContractId, resolveAccount } from "./config.js";
-import { SecretResolver } from "./secrets.js";
+import { isSshAgentRef, SecretResolver } from "./secrets.js";
+import { type Signer, KeypairSigner, createSshAgentSigner } from "./signer.js";
 
 export interface RuntimeExternalSigner {
   kind: "external";
   name: string;
   verifierContractId: string;
   publicKeyHex: string;
-  keypair: Keypair;
+  signer: Signer;
 }
 
 export interface RuntimeDelegatedSigner {
   kind: "delegated";
   name: string;
   address: string;
-  keypair: Keypair;
+  signer: Signer;
 }
 
 export interface RuntimeSigners {
@@ -31,8 +32,8 @@ export interface RuntimeSigners {
   delegated: RuntimeDelegatedSigner[];
   externalByComposite: Map<string, RuntimeExternalSigner>;
   delegatedByAddress: Map<string, RuntimeDelegatedSigner>;
-  byAddress: Map<string, Keypair>;
-  allKeypairs: Keypair[];
+  byAddress: Map<string, Signer>;
+  allSigners: Signer[];
 }
 
 export interface SignDetail {
@@ -110,13 +111,8 @@ function assertSeed(secret: string, label: string): Keypair {
   return keypair;
 }
 
-function loadExternalSigner(
-  row: ExternalSignerConfig,
-  secret: string,
-  accountAlias: string,
-): RuntimeExternalSigner {
-  const keypair = assertSeed(secret, `External signer '${row.name}' in account '${accountAlias}'`);
-  const actualHex = Buffer.from(keypair.rawPublicKey()).toString("hex");
+function loadExternalSigner(row: ExternalSignerConfig, signer: Signer): RuntimeExternalSigner {
+  const actualHex = signer.rawPublicKey().toString("hex");
   const expectedHex = normalizeHex(row.public_key_hex);
   if (actualHex !== expectedHex) {
     throw new Error(
@@ -129,17 +125,12 @@ function loadExternalSigner(
     name: row.name,
     verifierContractId: row.verifier_contract_id,
     publicKeyHex: expectedHex,
-    keypair,
+    signer,
   };
 }
 
-function loadDelegatedSigner(
-  row: DelegatedSignerConfig,
-  secret: string,
-  accountAlias: string,
-): RuntimeDelegatedSigner {
-  const keypair = assertSeed(secret, `Delegated signer '${row.name}' in account '${accountAlias}'`);
-  const derived = keypair.publicKey();
+function loadDelegatedSigner(row: DelegatedSignerConfig, signer: Signer): RuntimeDelegatedSigner {
+  const derived = signer.publicKey();
   if (derived !== row.address) {
     throw new Error(
       `Delegated signer '${row.name}' address mismatch: expected ${row.address}, got ${derived}`,
@@ -150,8 +141,21 @@ function loadDelegatedSigner(
     kind: "delegated",
     name: row.name,
     address: row.address,
-    keypair,
+    signer,
   };
+}
+
+async function resolveSignerFromRef(
+  ref: string,
+  label: string,
+  resolver: SecretResolver,
+): Promise<Signer> {
+  if (isSshAgentRef(ref)) {
+    return createSshAgentSigner(ref);
+  }
+  const seed = await resolver.resolve(ref);
+  const keypair = assertSeed(seed, label);
+  return new KeypairSigner(keypair);
 }
 
 export async function loadRuntimeSigners(
@@ -165,7 +169,7 @@ export async function loadRuntimeSigners(
       externalByComposite: new Map(),
       delegatedByAddress: new Map(),
       byAddress: new Map(),
-      allKeypairs: [],
+      allSigners: [],
     };
   }
 
@@ -175,34 +179,42 @@ export async function loadRuntimeSigners(
 
   for (const row of account.external_signers ?? []) {
     if (!row.enabled) continue;
-    const seed = await resolver.resolve(row.secret_ref);
-    external.push(loadExternalSigner(row, seed, alias));
+    const signer = await resolveSignerFromRef(
+      row.secret_ref,
+      `External signer '${row.name}' in account '${alias}'`,
+      resolver,
+    );
+    external.push(loadExternalSigner(row, signer));
   }
 
   for (const row of account.delegated_signers ?? []) {
     if (!row.enabled) continue;
-    const seed = await resolver.resolve(row.secret_ref);
-    delegated.push(loadDelegatedSigner(row, seed, alias));
+    const signer = await resolveSignerFromRef(
+      row.secret_ref,
+      `Delegated signer '${row.name}' in account '${alias}'`,
+      resolver,
+    );
+    delegated.push(loadDelegatedSigner(row, signer));
   }
 
   const externalByComposite = new Map<string, RuntimeExternalSigner>();
   const delegatedByAddress = new Map<string, RuntimeDelegatedSigner>();
-  const byAddress = new Map<string, Keypair>();
+  const byAddress = new Map<string, Signer>();
 
   for (const signer of external) {
     externalByComposite.set(
       compositeExternalKey(signer.verifierContractId, signer.publicKeyHex),
       signer,
     );
-    byAddress.set(signer.keypair.publicKey(), signer.keypair);
+    byAddress.set(signer.signer.publicKey(), signer.signer);
   }
 
   for (const signer of delegated) {
     delegatedByAddress.set(signer.address, signer);
-    byAddress.set(signer.address, signer.keypair);
+    byAddress.set(signer.address, signer.signer);
   }
 
-  const allKeypairs = [...byAddress.values()];
+  const allSigners = [...byAddress.values()];
 
   return {
     external,
@@ -210,7 +222,7 @@ export async function loadRuntimeSigners(
     externalByComposite,
     delegatedByAddress,
     byAddress,
-    allKeypairs,
+    allSigners,
   };
 }
 
@@ -444,13 +456,13 @@ function randomNonceInt64(): xdr.Int64 {
   return xdr.Int64.fromString(value.toString());
 }
 
-function createDelegatedAuthEntry(
+async function createDelegatedAuthEntry(
   contractId: string,
   delegated: RuntimeDelegatedSigner,
   signaturePayload: Buffer,
   expirationLedger: number,
   networkPassphrase: string,
-): xdr.SorobanAuthorizationEntry {
+): Promise<xdr.SorobanAuthorizationEntry> {
   const delegatedInvocation = new xdr.SorobanAuthorizedInvocation({
     function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
       new xdr.InvokeContractArgs({
@@ -473,7 +485,7 @@ function createDelegatedAuthEntry(
   );
 
   const delegatedPayload = hash(delegatedPreimage.toXDR());
-  const signature = Buffer.from(delegated.keypair.sign(delegatedPayload));
+  const signature = await delegated.signer.sign(delegatedPayload);
 
   return new xdr.SorobanAuthorizationEntry({
     credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
@@ -499,14 +511,14 @@ function selectAccountForAddress(
   return findAccountByContractId(context.config, context.networkName, address);
 }
 
-function signGenericAddressEntry(
+async function signGenericAddressEntry(
   entry: xdr.SorobanAuthorizationEntry,
-  signer: Keypair,
+  signer: Signer,
   report: SignReport,
   networkPassphrase: string,
-): xdr.SorobanAuthorizationEntry {
+): Promise<xdr.SorobanAuthorizationEntry> {
   const payload = authorizationPayload(entry, networkPassphrase);
-  const signature = Buffer.from(signer.sign(payload));
+  const signature = await signer.sign(payload);
   entry.credentials().address().signature(makeAddressSignatureScVal(signer.publicKey(), signature));
   reportSigned(report, `auth:${signer.publicKey()}`, "signed address auth entry");
   return entry;
@@ -537,13 +549,13 @@ function appendMissingSmartAccountEntries(
   sortMapEntries(sigMap);
 }
 
-function signSmartAccountEntry(
+async function signSmartAccountEntry(
   entry: xdr.SorobanAuthorizationEntry,
   accountRef: { alias: string; account: SmartAccountConfig },
   runtimeSigners: RuntimeSigners,
   report: SignReport,
   networkPassphrase: string,
-): xdr.SorobanAuthorizationEntry[] {
+): Promise<xdr.SorobanAuthorizationEntry[]> {
   const payload = authorizationPayload(entry, networkPassphrase);
   const creds = entry.credentials().address();
   const sigMap = ensureSignatureMap(creds);
@@ -573,7 +585,7 @@ function signSmartAccountEntry(
         continue;
       }
 
-      const signature = Buffer.from(signer.keypair.sign(payload));
+      const signature = await signer.signer.sign(payload);
       item.val(xdr.ScVal.scvBytes(signature));
       reportSigned(report, `auth:${accountRef.alias}`, `signed external signer ${signer.name}`);
       continue;
@@ -605,7 +617,7 @@ function signSmartAccountEntry(
 
   for (const delegated of delegatedToExpand.values()) {
     extraEntries.push(
-      createDelegatedAuthEntry(
+      await createDelegatedAuthEntry(
         accountRef.account.contract_id,
         delegated,
         payload,
@@ -623,11 +635,11 @@ function signSmartAccountEntry(
   return extraEntries;
 }
 
-function signOneAuthEntry(
+async function signOneAuthEntry(
   entry: xdr.SorobanAuthorizationEntry,
   context: SignContext,
   report: SignReport,
-): xdr.SorobanAuthorizationEntry[] {
+): Promise<xdr.SorobanAuthorizationEntry[]> {
   if (entry.credentials().switch().name !== "sorobanCredentialsAddress") {
     reportSkipped(report, "auth", "unsupported credential type");
     return [entry];
@@ -643,7 +655,9 @@ function signOneAuthEntry(
       return [entry];
     }
 
-    return [signGenericAddressEntry(entry, signer, report, context.network.network_passphrase)];
+    return [
+      await signGenericAddressEntry(entry, signer, report, context.network.network_passphrase),
+    ];
   }
 
   if (authAddress.startsWith("C")) {
@@ -670,16 +684,16 @@ function signOneAuthEntry(
   return [entry];
 }
 
-function signAuthList(
+async function signAuthList(
   entries: xdr.SorobanAuthorizationEntry[],
   context: SignContext,
   report: SignReport,
-): xdr.SorobanAuthorizationEntry[] {
+): Promise<xdr.SorobanAuthorizationEntry[]> {
   const signed: xdr.SorobanAuthorizationEntry[] = [];
 
   for (const entry of entries) {
     const withTtl = withExpiration(entry, context.expirationLedger);
-    const out = signOneAuthEntry(withTtl, context, report);
+    const out = await signOneAuthEntry(withTtl, context, report);
     signed.push(...out);
   }
 
@@ -732,33 +746,33 @@ function collectSigningAddresses(tx: unknown): Set<string> {
   return addresses;
 }
 
-function signEnvelopeSignatures(
+async function signEnvelopeSignatures(
   envelopeXdr: string,
   context: SignContext,
   report: SignReport,
-): string {
+): Promise<string> {
   const tx = TransactionBuilder.fromXDR(envelopeXdr, context.network.network_passphrase);
   const signingAddresses = collectSigningAddresses(tx);
 
-  for (const keypair of context.runtimeSigners.allKeypairs) {
-    if (!signingAddresses.has(keypair.publicKey())) {
+  for (const signer of context.runtimeSigners.allSigners) {
+    if (!signingAddresses.has(signer.publicKey())) {
       continue;
     }
 
-    tx.sign(keypair);
-    reportSigned(report, `tx:${keypair.publicKey()}`, "added envelope signature");
+    await signer.signTransaction(tx);
+    reportSigned(report, `tx:${signer.publicKey()}`, "added envelope signature");
   }
 
   return tx.toXDR();
 }
 
-function signTransactionInput(
+async function signTransactionInput(
   parsed: ParsedInput & { kind: "tx" },
   context: SignContext,
-): {
+): Promise<{
   out: string;
   report: SignReport;
-} {
+}> {
   const report = createReport("tx");
   const envelope = xdr.TransactionEnvelope.fromXDR(parsed.envelope.toXDR());
 
@@ -770,23 +784,27 @@ function signTransactionInput(
 
     const invoke = op.body().invokeHostFunctionOp();
     const authEntries = invoke.auth();
-    const signedAuth = signAuthList(authEntries, context, report);
+    const signedAuth = await signAuthList(authEntries, context, report);
     invoke.auth(signedAuth);
   }
 
-  const signedEnvelopeXdr = signEnvelopeSignatures(envelope.toXDR("base64"), context, report);
+  const signedEnvelopeXdr = await signEnvelopeSignatures(
+    envelope.toXDR("base64"),
+    context,
+    report,
+  );
   return { out: signedEnvelopeXdr, report };
 }
 
-function signAuthInput(
+async function signAuthInput(
   parsed: ParsedInput & { kind: "auth" },
   context: SignContext,
-): {
+): Promise<{
   out: string;
   report: SignReport;
-} {
+}> {
   const report = createReport("auth");
-  const signed = signAuthList(parsed.auth, context, report);
+  const signed = await signAuthList(parsed.auth, context, report);
 
   if (signed.length === 1) {
     return { out: signed[0]!.toXDR("base64"), report };
@@ -798,15 +816,15 @@ function signAuthInput(
   };
 }
 
-function signBundleInput(
+async function signBundleInput(
   parsed: ParsedInput & { kind: "bundle" },
   context: SignContext,
-): {
+): Promise<{
   out: string;
   report: SignReport;
-} {
+}> {
   const report = createReport("bundle");
-  const signed = signAuthList(parsed.auth, context, report);
+  const signed = await signAuthList(parsed.auth, context, report);
 
   return {
     out: JSON.stringify(
@@ -929,8 +947,8 @@ export function canSignInput(parsed: ParsedInput, context: SignContext): Record<
       context.network.network_passphrase,
     );
     const signingAddresses = collectSigningAddresses(tx);
-    const matched = context.runtimeSigners.allKeypairs
-      .map((kp) => kp.publicKey())
+    const matched = context.runtimeSigners.allSigners
+      .map((s) => s.publicKey())
       .filter((pk) => signingAddresses.has(pk));
 
     const operations = getEnvelopeOperations(parsed.envelope);
@@ -976,24 +994,24 @@ export async function computeExpirationLedger(
   return latestLedger + Math.ceil(ttlSeconds / ledgerSeconds);
 }
 
-export function signInput(
+export async function signInput(
   parsed: ParsedInput,
   context: SignContext,
-): {
+): Promise<{
   output: string;
   report: SignReport;
-} {
+}> {
   if (parsed.kind === "tx") {
-    const { out, report } = signTransactionInput(parsed, context);
+    const { out, report } = await signTransactionInput(parsed, context);
     return { output: out, report };
   }
 
   if (parsed.kind === "auth") {
-    const { out, report } = signAuthInput(parsed, context);
+    const { out, report } = await signAuthInput(parsed, context);
     return { output: out, report };
   }
 
-  const { out, report } = signBundleInput(parsed, context);
+  const { out, report } = await signBundleInput(parsed, context);
   return { output: out, report };
 }
 
