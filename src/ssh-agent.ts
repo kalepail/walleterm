@@ -195,39 +195,45 @@ function parseIdentitiesResponse(data: Buffer): SshAgentIdentity[] {
     throw new Error(`Unexpected SSH agent response type: ${data[0]}`);
   }
 
-  let offset = 1;
-  const { value: nkeys, offset: off1 } = readUint32(data, offset);
-  offset = off1;
+  try {
+    let offset = 1;
+    const { value: nkeys, offset: off1 } = readUint32(data, offset);
+    offset = off1;
 
-  const identities: SshAgentIdentity[] = [];
+    const identities: SshAgentIdentity[] = [];
 
-  for (let i = 0; i < nkeys; i++) {
-    const { value: keyBlob, offset: off2 } = readString(data, offset);
-    offset = off2;
-    const { value: commentBuf, offset: off3 } = readString(data, offset);
-    offset = off3;
+    for (let i = 0; i < nkeys; i++) {
+      const { value: keyBlob, offset: off2 } = readString(data, offset);
+      offset = off2;
+      const { value: commentBuf, offset: off3 } = readString(data, offset);
+      offset = off3;
 
-    try {
-      let blobOffset = 0;
-      const { value: algoName, offset: boff1 } = readString(keyBlob, blobOffset);
-      blobOffset = boff1;
+      try {
+        let blobOffset = 0;
+        const { value: algoName, offset: boff1 } = readString(keyBlob, blobOffset);
+        blobOffset = boff1;
 
-      if (algoName.toString() !== "ssh-ed25519") continue;
+        if (algoName.toString() !== "ssh-ed25519") continue;
 
-      const { value: pubkey } = readString(keyBlob, blobOffset);
-      if (pubkey.length !== 32) continue;
+        const { value: pubkey } = readString(keyBlob, blobOffset);
+        if (pubkey.length !== 32) continue;
 
-      identities.push({
-        keyBlob: Buffer.from(keyBlob),
-        comment: commentBuf.toString(),
-        publicKey: Buffer.from(pubkey),
-      });
-    } catch {
-      continue;
+        identities.push({
+          keyBlob: Buffer.from(keyBlob),
+          comment: commentBuf.toString(),
+          publicKey: Buffer.from(pubkey),
+        });
+      } catch {
+        continue;
+      }
     }
-  }
 
-  return identities;
+    return identities;
+  } catch (err) {
+    throw new Error(
+      `Malformed SSH agent identities response: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 function parseSignResponse(data: Buffer): Buffer {
@@ -243,23 +249,32 @@ function parseSignResponse(data: Buffer): Buffer {
     throw new Error(`Unexpected SSH agent sign response type: ${data[0]}`);
   }
 
-  let offset = 1;
-  const { value: sigBlob } = readString(data, offset);
+  try {
+    let offset = 1;
+    const { value: sigBlob } = readString(data, offset);
 
-  let blobOffset = 0;
-  const { value: algo, offset: boff1 } = readString(sigBlob, blobOffset);
-  blobOffset = boff1;
-  const { value: rawSig } = readString(sigBlob, blobOffset);
+    let blobOffset = 0;
+    const { value: algo, offset: boff1 } = readString(sigBlob, blobOffset);
+    blobOffset = boff1;
+    const { value: rawSig } = readString(sigBlob, blobOffset);
 
-  if (algo.toString() !== "ssh-ed25519") {
-    throw new Error(`Unexpected signature algorithm: ${algo.toString()}`);
+    if (algo.toString() !== "ssh-ed25519") {
+      throw new Error(`Unexpected signature algorithm: ${algo.toString()}`);
+    }
+
+    if (rawSig.length !== 64) {
+      throw new Error(`Unexpected Ed25519 signature length: ${rawSig.length}`);
+    }
+
+    return Buffer.from(rawSig);
+  } catch (err) {
+    if (err instanceof Error && !err.message.startsWith("Unexpected ")) {
+      throw new Error(
+        `Malformed SSH agent sign response: ${err.message}`,
+      );
+    }
+    throw err;
   }
-
-  if (rawSig.length !== 64) {
-    throw new Error(`Unexpected Ed25519 signature length: ${rawSig.length}`);
-  }
-
-  return Buffer.from(rawSig);
 }
 
 export async function listAgentIdentities(socketPath: string): Promise<SshAgentIdentity[]> {
