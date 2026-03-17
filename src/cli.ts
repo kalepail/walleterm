@@ -29,7 +29,7 @@ import { defaultServiceForNetwork, setupMacOSKeychainForWallet } from "./keychai
 import { SecretResolver } from "./secrets.js";
 import { defaultItemForNetwork, setupOnePasswordForWallet } from "./op-setup.js";
 import { KeypairSigner } from "./signer.js";
-import { setupSshAgentForWallet } from "./ssh-agent-setup.js";
+import { generateSshAgentKey, setupSshAgentForWallet } from "./ssh-agent-setup.js";
 import { submitTxXdrViaRpc, submitViaChannels, type SubmitNetworkOverrides } from "./submit.js";
 import {
   buildSignerMutationBundle,
@@ -875,32 +875,62 @@ interface SetupSshAgentOpts {
   backend: string;
   socket?: string;
   json?: boolean;
+  generate?: boolean;
+  vault?: string;
+  title?: string;
+  keyPath?: string;
 }
 
 setup
   .command("ssh-agent")
-  .description("discover Ed25519 keys in an SSH agent and generate config refs")
+  .description("discover or generate Ed25519 keys for SSH agent signing")
   .option("--backend <name>", "agent backend: system, 1password, or custom", "system")
   .option("--socket <path>", "explicit agent socket path (required for custom backend)")
   .option("--json", "print only json output", false)
+  .option("--generate", "generate a new Ed25519 key in the backend", false)
+  .option("--vault <name>", "1Password vault (for --generate with 1password backend)", "Private")
+  .option("--title <name>", "1Password item title (for --generate with 1password backend)", "walleterm-ed25519")
+  .option("--key-path <path>", "key file path (for --generate with system backend)")
   .action(async (opts: SetupSshAgentOpts) => {
-    const result = await setupSshAgentForWallet({
-      backend: opts.backend,
-      socketPath: opts.socket,
-    });
+    if (opts.generate) {
+      const result = await generateSshAgentKey({
+        backend: opts.backend as "1password" | "system",
+        socketPath: opts.socket,
+        vault: opts.vault,
+        title: opts.title,
+        keyPath: opts.keyPath,
+      });
 
-    if (!opts.json) {
-      process.stderr.write(`SSH agent discovery complete (${result.backend}).\n`);
-      process.stderr.write(`socket: ${result.socket_path}\n`);
-      process.stderr.write(`found ${result.keys.length} Ed25519 key(s):\n`);
-      for (const key of result.keys) {
-        process.stderr.write(`  ${key.stellar_address} (${key.comment})\n`);
+      if (!opts.json) {
+        process.stderr.write(`SSH agent key generated (${result.backend}).\n`);
+        process.stderr.write(`socket: ${result.socket_path}\n`);
+        process.stderr.write(`stellar_address: ${result.key.stellar_address}\n`);
+        process.stderr.write(`ref: ${result.key.ref}\n`);
+        if (result.key_path) process.stderr.write(`key_path: ${result.key_path}\n`);
+        if (result.agent_toml_path) process.stderr.write(`agent_toml: ${result.agent_toml_path}\n`);
+        process.stderr.write("config snippet:\n");
+        process.stderr.write(`${result.config_snippet}\n`);
       }
-      process.stderr.write("config snippet:\n");
-      process.stderr.write(`${result.config_snippet}\n`);
-    }
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    } else {
+      const result = await setupSshAgentForWallet({
+        backend: opts.backend,
+        socketPath: opts.socket,
+      });
 
-    process.stdout.write(`${JSON.stringify(result)}\n`);
+      if (!opts.json) {
+        process.stderr.write(`SSH agent discovery complete (${result.backend}).\n`);
+        process.stderr.write(`socket: ${result.socket_path}\n`);
+        process.stderr.write(`found ${result.keys.length} Ed25519 key(s):\n`);
+        for (const key of result.keys) {
+          process.stderr.write(`  ${key.stellar_address} (${key.comment})\n`);
+        }
+        process.stderr.write("config snippet:\n");
+        process.stderr.write(`${result.config_snippet}\n`);
+      }
+
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+    }
   });
 
 const wallet = program

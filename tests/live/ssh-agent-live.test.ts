@@ -1,6 +1,6 @@
 import { execa } from "execa";
 import { randomBytes } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { existsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Address, Asset, Keypair, Networks, StrKey, xdr } from "@stellar/stellar-sdk";
@@ -516,6 +516,578 @@ enabled = true
       console.log(
         `[live.ssh-agent] recipient balance change: ${recipientBalanceAfter - recipientBalanceBefore} stroops`,
       );
+    },
+  );
+});
+
+const LIVE_1P_ENABLED =
+  LIVE_ENABLED && process.env.WALLETERM_LIVE_SSH_AGENT_1P === "1";
+
+describe.skipIf(!LIVE_1P_ENABLED)("ssh-agent 1password generate live", () => {
+  it(
+    "generates a key in 1Password, deploys a wallet, signs a payment via SSH agent, and verifies on-chain",
+    { timeout: 240_000 },
+    async () => {
+      const uniqueTitle = `walleterm-live-${randomBytes(6).toString("hex")}`;
+
+      try {
+        // Phase 1: Generate SSH key in 1Password via CLI
+        const setup = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "setup",
+            "ssh-agent",
+            "--backend",
+            "1password",
+            "--generate",
+            "--title",
+            uniqueTitle,
+            "--json",
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+
+        const setupOut = JSON.parse(setup.stdout) as {
+          generated: boolean;
+          key: { stellar_address: string; ref: string };
+          op_item_id: string;
+          agent_toml_updated: boolean;
+          config_snippet: string;
+        };
+
+        expect(setupOut.generated).toBe(true);
+        expect(setupOut.key.stellar_address.startsWith("G")).toBe(true);
+        expect(setupOut.key.ref.startsWith("ssh-agent://1password/")).toBe(true);
+        expect(setupOut.agent_toml_updated).toBe(true);
+
+        const sshStellarAddress = setupOut.key.stellar_address;
+        const sshAgentRef = setupOut.key.ref;
+        console.log(
+          `[live.ssh-agent-1p] generated key: ${sshStellarAddress} item=${uniqueTitle}`,
+        );
+
+        // Phase 2: Deploy a wallet with this key as delegated signer
+        const rootDir = makeTempDir("walleterm-ssh-agent-1p-live-");
+        const configPath = join(rootDir, "walleterm.toml");
+        const deployXdrPath = join(rootDir, "deploy.tx.xdr");
+        const fundUnsignedPath = join(rootDir, "fund.bundle.json");
+        const fundSignedPath = join(rootDir, "fund.signed.bundle.json");
+        const paymentUnsignedPath = join(rootDir, "payment.bundle.json");
+        const paymentSignedPath = join(rootDir, "payment.signed.bundle.json");
+
+        const wasmHash = DEFAULT_WASM_HASH;
+        const rpcUrl = "https://soroban-rpc.testnet.stellar.gateway.fm";
+        const channelsBaseUrl = "https://channels.openzeppelin.com/testnet";
+        const recipient = Keypair.random();
+        const saltHex = randomBytes(32).toString("hex");
+
+        const keyResponse = await fetch("https://channels.openzeppelin.com/testnet/gen");
+        expect(keyResponse.ok).toBe(true);
+        const keyData = (await keyResponse.json()) as { apiKey?: string };
+
+        await fundWithFriendbot(sshStellarAddress);
+        await fundWithFriendbot(recipient.publicKey());
+
+        writeFileSync(
+          configPath,
+          `[app]
+default_network = "testnet"
+strict_onchain = true
+onchain_signer_mode = "subset"
+default_ttl_seconds = 30
+assumed_ledger_time_seconds = 6
+default_submit_mode = "channels"
+
+[networks.testnet]
+rpc_url = "${rpcUrl}"
+network_passphrase = "${Networks.TESTNET}"
+channels_base_url = "${channelsBaseUrl}"
+
+[smart_accounts]
+`,
+          "utf8",
+        );
+
+        const create = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "wallet",
+            "create",
+            "--config",
+            configPath,
+            "--wasm-hash",
+            wasmHash,
+            "--delegated-address",
+            sshStellarAddress,
+            "--salt-hex",
+            saltHex,
+            "--submit",
+            "--channels-api-key",
+            keyData.apiKey!,
+            "--out",
+            deployXdrPath,
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+
+        const createOut = JSON.parse(create.stdout) as {
+          contract_id: string;
+          submitted: boolean;
+          submission?: { hash?: string; status?: string };
+        };
+        expect(createOut.contract_id.startsWith("C")).toBe(true);
+        console.log(
+          `[live.ssh-agent-1p] contract_id=${createOut.contract_id} deploy_hash=${createOut.submission?.hash}`,
+        );
+        await waitForHorizonTransaction(createOut.submission!.hash!);
+
+        // Wait for indexer to pick up the contract before strict_onchain reconciliation
+        await waitForWalletLookup(
+          ["--config", configPath, "--network", "testnet", "--contract-id", createOut.contract_id],
+          process.env,
+          (result) =>
+            result.count === 1 &&
+            (result.wallets?.[0]?.onchain_signers?.length ?? 0) > 0,
+        );
+
+        // Phase 3: Configure wallet with ssh-agent:// ref and sign via 1Password SSH agent
+        writeFileSync(
+          configPath,
+          `[app]
+default_network = "testnet"
+strict_onchain = true
+onchain_signer_mode = "subset"
+default_ttl_seconds = 30
+assumed_ledger_time_seconds = 6
+default_submit_mode = "channels"
+
+[networks.testnet]
+rpc_url = "${rpcUrl}"
+network_passphrase = "${Networks.TESTNET}"
+channels_base_url = "${channelsBaseUrl}"
+
+[smart_accounts.live_wallet]
+network = "testnet"
+contract_id = "${createOut.contract_id}"
+expected_wasm_hash = "${wasmHash}"
+
+[[smart_accounts.live_wallet.delegated_signers]]
+name = "ssh_1p_signer"
+address = "${sshStellarAddress}"
+secret_ref = "${sshAgentRef}"
+enabled = true
+`,
+          "utf8",
+        );
+
+        const nativeAssetContractId = Asset.native().contractId(Networks.TESTNET);
+
+        // Fund smart account
+        const fundBundle = buildNativeTransferBundle(
+          nativeAssetContractId,
+          sshStellarAddress,
+          createOut.contract_id,
+          20_000_000n,
+        );
+        writeFileSync(fundUnsignedPath, JSON.stringify(fundBundle), "utf8");
+
+        const signedFund = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "sign",
+            "--config",
+            configPath,
+            "--account",
+            "live_wallet",
+            "--in",
+            fundUnsignedPath,
+            "--out",
+            fundSignedPath,
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+        expect(
+          (JSON.parse(signedFund.stdout) as { summary: { signed: number } }).summary.signed,
+        ).toBeGreaterThan(0);
+
+        const fundSubmit = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "submit",
+            "--config",
+            configPath,
+            "--in",
+            fundSignedPath,
+            "--channels-api-key",
+            keyData.apiKey!,
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+        const fundSubmitOut = JSON.parse(fundSubmit.stdout) as { hash: string; status: string };
+        console.log(
+          `[live.ssh-agent-1p] fund_hash=${fundSubmitOut.hash} status=${fundSubmitOut.status}`,
+        );
+        await waitForHorizonTransaction(fundSubmitOut.hash);
+
+        // Phase 4: Send payment from smart account via SSH agent signing
+        const recipientBalanceBefore = await getNativeBalanceStroops(recipient.publicKey());
+
+        const paymentBundle = buildNativeTransferBundle(
+          nativeAssetContractId,
+          createOut.contract_id,
+          recipient.publicKey(),
+          10_000_000n,
+        );
+        writeFileSync(paymentUnsignedPath, JSON.stringify(paymentBundle), "utf8");
+
+        const signedPayment = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "sign",
+            "--config",
+            configPath,
+            "--account",
+            "live_wallet",
+            "--in",
+            paymentUnsignedPath,
+            "--out",
+            paymentSignedPath,
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+        expect(
+          (JSON.parse(signedPayment.stdout) as { summary: { signed: number } }).summary.signed,
+        ).toBeGreaterThan(0);
+
+        const paymentSubmit = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "submit",
+            "--config",
+            configPath,
+            "--in",
+            paymentSignedPath,
+            "--channels-api-key",
+            keyData.apiKey!,
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+        const paymentSubmitOut = JSON.parse(paymentSubmit.stdout) as {
+          hash: string;
+          status: string;
+        };
+        console.log(
+          `[live.ssh-agent-1p] payment_hash=${paymentSubmitOut.hash} status=${paymentSubmitOut.status}`,
+        );
+        await waitForHorizonTransaction(paymentSubmitOut.hash);
+
+        const recipientBalanceAfter = await getNativeBalanceStroops(recipient.publicKey());
+        expect(recipientBalanceAfter - recipientBalanceBefore).toBeGreaterThanOrEqual(10_000_000n);
+        console.log(
+          `[live.ssh-agent-1p] balance change: ${recipientBalanceAfter - recipientBalanceBefore} stroops`,
+        );
+      } finally {
+        try {
+          await execa("op", ["item", "delete", uniqueTitle, "--vault", "Private"], {
+            cwd: PROJECT_ROOT,
+          });
+        } catch {
+          // cleanup best-effort
+        }
+      }
+    },
+  );
+});
+
+const LIVE_SYSTEM_ENABLED =
+  LIVE_ENABLED && process.env.WALLETERM_LIVE_SSH_AGENT_SYSTEM === "1";
+
+describe.skipIf(!LIVE_SYSTEM_ENABLED)("ssh-agent system generate live", () => {
+  it(
+    "generates a key file, deploys a wallet, signs a payment via system SSH agent, and verifies on-chain",
+    { timeout: 240_000 },
+    async () => {
+      const rootDir = makeTempDir("walleterm-ssh-agent-system-live-");
+      const keyPath = join(rootDir, "test_ed25519");
+
+      try {
+        // Phase 1: Generate SSH key via CLI
+        const setup = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "setup",
+            "ssh-agent",
+            "--backend",
+            "system",
+            "--generate",
+            "--key-path",
+            keyPath,
+            "--json",
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+
+        const setupOut = JSON.parse(setup.stdout) as {
+          generated: boolean;
+          key: { stellar_address: string; ref: string };
+          key_path: string;
+          public_key_path: string;
+        };
+
+        expect(setupOut.generated).toBe(true);
+        expect(setupOut.key.stellar_address.startsWith("G")).toBe(true);
+        expect(setupOut.key.ref.startsWith("ssh-agent://system/")).toBe(true);
+        expect(existsSync(setupOut.key_path)).toBe(true);
+        expect(existsSync(setupOut.public_key_path)).toBe(true);
+        expect(statSync(setupOut.key_path).mode & 0o777).toBe(0o600);
+
+        const sshStellarAddress = setupOut.key.stellar_address;
+        const sshAgentRef = setupOut.key.ref;
+        console.log(`[live.ssh-agent-system] generated key: ${sshStellarAddress} at ${keyPath}`);
+
+        // Phase 2: Deploy a wallet with this key as delegated signer
+        const configPath = join(rootDir, "walleterm.toml");
+        const deployXdrPath = join(rootDir, "deploy.tx.xdr");
+        const fundUnsignedPath = join(rootDir, "fund.bundle.json");
+        const fundSignedPath = join(rootDir, "fund.signed.bundle.json");
+        const paymentUnsignedPath = join(rootDir, "payment.bundle.json");
+        const paymentSignedPath = join(rootDir, "payment.signed.bundle.json");
+
+        const wasmHash = DEFAULT_WASM_HASH;
+        const rpcUrl = "https://soroban-rpc.testnet.stellar.gateway.fm";
+        const channelsBaseUrl = "https://channels.openzeppelin.com/testnet";
+        const recipient = Keypair.random();
+        const saltHex = randomBytes(32).toString("hex");
+
+        const keyResponse = await fetch("https://channels.openzeppelin.com/testnet/gen");
+        expect(keyResponse.ok).toBe(true);
+        const keyData = (await keyResponse.json()) as { apiKey?: string };
+
+        await fundWithFriendbot(sshStellarAddress);
+        await fundWithFriendbot(recipient.publicKey());
+
+        writeFileSync(
+          configPath,
+          `[app]
+default_network = "testnet"
+strict_onchain = true
+onchain_signer_mode = "subset"
+default_ttl_seconds = 30
+assumed_ledger_time_seconds = 6
+default_submit_mode = "channels"
+
+[networks.testnet]
+rpc_url = "${rpcUrl}"
+network_passphrase = "${Networks.TESTNET}"
+channels_base_url = "${channelsBaseUrl}"
+
+[smart_accounts]
+`,
+          "utf8",
+        );
+
+        const create = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "wallet",
+            "create",
+            "--config",
+            configPath,
+            "--wasm-hash",
+            wasmHash,
+            "--delegated-address",
+            sshStellarAddress,
+            "--salt-hex",
+            saltHex,
+            "--submit",
+            "--channels-api-key",
+            keyData.apiKey!,
+            "--out",
+            deployXdrPath,
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+
+        const createOut = JSON.parse(create.stdout) as {
+          contract_id: string;
+          submission?: { hash?: string; status?: string };
+        };
+        expect(createOut.contract_id.startsWith("C")).toBe(true);
+        console.log(
+          `[live.ssh-agent-system] contract_id=${createOut.contract_id} deploy_hash=${createOut.submission?.hash}`,
+        );
+        await waitForHorizonTransaction(createOut.submission!.hash!);
+
+        // Wait for indexer to pick up the contract before strict_onchain reconciliation
+        await waitForWalletLookup(
+          ["--config", configPath, "--network", "testnet", "--contract-id", createOut.contract_id],
+          process.env,
+          (result) =>
+            result.count === 1 &&
+            (result.wallets?.[0]?.onchain_signers?.length ?? 0) > 0,
+        );
+
+        // Phase 3: Configure and sign via system SSH agent
+        writeFileSync(
+          configPath,
+          `[app]
+default_network = "testnet"
+strict_onchain = true
+onchain_signer_mode = "subset"
+default_ttl_seconds = 30
+assumed_ledger_time_seconds = 6
+default_submit_mode = "channels"
+
+[networks.testnet]
+rpc_url = "${rpcUrl}"
+network_passphrase = "${Networks.TESTNET}"
+channels_base_url = "${channelsBaseUrl}"
+
+[smart_accounts.live_wallet]
+network = "testnet"
+contract_id = "${createOut.contract_id}"
+expected_wasm_hash = "${wasmHash}"
+
+[[smart_accounts.live_wallet.delegated_signers]]
+name = "ssh_system_signer"
+address = "${sshStellarAddress}"
+secret_ref = "${sshAgentRef}"
+enabled = true
+`,
+          "utf8",
+        );
+
+        const nativeAssetContractId = Asset.native().contractId(Networks.TESTNET);
+
+        // Fund smart account
+        const fundBundle = buildNativeTransferBundle(
+          nativeAssetContractId,
+          sshStellarAddress,
+          createOut.contract_id,
+          20_000_000n,
+        );
+        writeFileSync(fundUnsignedPath, JSON.stringify(fundBundle), "utf8");
+
+        const signedFund = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "sign",
+            "--config",
+            configPath,
+            "--account",
+            "live_wallet",
+            "--in",
+            fundUnsignedPath,
+            "--out",
+            fundSignedPath,
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+        expect(
+          (JSON.parse(signedFund.stdout) as { summary: { signed: number } }).summary.signed,
+        ).toBeGreaterThan(0);
+
+        const fundSubmit = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "submit",
+            "--config",
+            configPath,
+            "--in",
+            fundSignedPath,
+            "--channels-api-key",
+            keyData.apiKey!,
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+        const fundSubmitOut = JSON.parse(fundSubmit.stdout) as { hash: string; status: string };
+        console.log(
+          `[live.ssh-agent-system] fund_hash=${fundSubmitOut.hash} status=${fundSubmitOut.status}`,
+        );
+        await waitForHorizonTransaction(fundSubmitOut.hash);
+
+        // Phase 4: Payment from smart account
+        const recipientBalanceBefore = await getNativeBalanceStroops(recipient.publicKey());
+
+        const paymentBundle = buildNativeTransferBundle(
+          nativeAssetContractId,
+          createOut.contract_id,
+          recipient.publicKey(),
+          10_000_000n,
+        );
+        writeFileSync(paymentUnsignedPath, JSON.stringify(paymentBundle), "utf8");
+
+        const signedPayment = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "sign",
+            "--config",
+            configPath,
+            "--account",
+            "live_wallet",
+            "--in",
+            paymentUnsignedPath,
+            "--out",
+            paymentSignedPath,
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+        expect(
+          (JSON.parse(signedPayment.stdout) as { summary: { signed: number } }).summary.signed,
+        ).toBeGreaterThan(0);
+
+        const paymentSubmit = await execa(
+          "bun",
+          [
+            "src/cli.ts",
+            "submit",
+            "--config",
+            configPath,
+            "--in",
+            paymentSignedPath,
+            "--channels-api-key",
+            keyData.apiKey!,
+          ],
+          { cwd: PROJECT_ROOT },
+        );
+        const paymentSubmitOut = JSON.parse(paymentSubmit.stdout) as {
+          hash: string;
+          status: string;
+        };
+        console.log(
+          `[live.ssh-agent-system] payment_hash=${paymentSubmitOut.hash} status=${paymentSubmitOut.status}`,
+        );
+        await waitForHorizonTransaction(paymentSubmitOut.hash);
+
+        const recipientBalanceAfter = await getNativeBalanceStroops(recipient.publicKey());
+        expect(recipientBalanceAfter - recipientBalanceBefore).toBeGreaterThanOrEqual(10_000_000n);
+        console.log(
+          `[live.ssh-agent-system] balance change: ${recipientBalanceAfter - recipientBalanceBefore} stroops`,
+        );
+      } finally {
+        try {
+          await execa("ssh-add", ["-d", keyPath], { cwd: PROJECT_ROOT });
+        } catch {
+          // cleanup best-effort
+        }
+        try {
+          if (existsSync(keyPath)) unlinkSync(keyPath);
+          if (existsSync(`${keyPath}.pub`)) unlinkSync(`${keyPath}.pub`);
+        } catch {
+          // cleanup best-effort
+        }
+      }
     },
   );
 });

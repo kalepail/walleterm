@@ -25,7 +25,9 @@
     "test:live:op": "WALLETERM_LIVE=1 WALLETERM_LIVE_OP=1 bun x vitest run --coverage=false tests/live/op-live.test.ts",
     "test:live:keychain": "WALLETERM_LIVE=1 WALLETERM_LIVE_KEYCHAIN=1 bun x vitest run --coverage=false tests/live/keychain-live.test.ts",
     "test:live:ssh-agent": "WALLETERM_LIVE=1 WALLETERM_LIVE_SSH_AGENT=1 bun x vitest run --coverage=false tests/live/ssh-agent-live.test.ts",
-    "test:live:all": "WALLETERM_LIVE=1 WALLETERM_LIVE_OP=1 WALLETERM_LIVE_KEYCHAIN=1 WALLETERM_LIVE_SSH_AGENT=1 bun x vitest run --coverage=false",
+    "test:live:ssh-agent:1p": "WALLETERM_LIVE=1 WALLETERM_LIVE_SSH_AGENT=1 WALLETERM_LIVE_SSH_AGENT_1P=1 bun x vitest run --coverage=false tests/live/ssh-agent-live.test.ts",
+    "test:live:ssh-agent:system": "WALLETERM_LIVE=1 WALLETERM_LIVE_SSH_AGENT=1 WALLETERM_LIVE_SSH_AGENT_SYSTEM=1 bun x vitest run --coverage=false tests/live/ssh-agent-live.test.ts",
+    "test:live:all": "WALLETERM_LIVE=1 WALLETERM_LIVE_OP=1 WALLETERM_LIVE_KEYCHAIN=1 WALLETERM_LIVE_SSH_AGENT=1 WALLETERM_LIVE_SSH_AGENT_1P=1 WALLETERM_LIVE_SSH_AGENT_SYSTEM=1 bun x vitest run --coverage=false",
     "install:ci": "bun install --frozen-lockfile"
   },
   "dependencies": {

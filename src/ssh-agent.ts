@@ -70,7 +70,7 @@ async function agentRequest(socketPath: string, request: Buffer): Promise<Buffer
         socket.destroy();
         reject(new Error(`SSH agent request timed out (socket: ${socketPath})`));
       }
-    }, 30_000);
+    }, 60_000);
 
     socket.on("connect", () => {
       socket.write(request);
