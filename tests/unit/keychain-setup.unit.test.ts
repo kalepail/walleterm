@@ -1,11 +1,11 @@
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultServiceForNetwork, setupMacOSKeychainForWallet } from "../../src/keychain-setup.js";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 function makeSecurityBin(): { securityBin: string; logPath: string } {
-  const root = mkdtempSync(join(tmpdir(), "walleterm-keychain-setup-unit-"));
+  const root = makeTempDir("walleterm-keychain-setup-unit-");
   const binDir = join(root, "bin");
   mkdirSync(binDir, { recursive: true });
   const securityBin = join(binDir, "security");
@@ -128,7 +128,7 @@ describe("keychain setup unit", () => {
   });
 
   it("redacts -w secret values in error messages", async () => {
-    const root = mkdtempSync(join(tmpdir(), "walleterm-keychain-redact-"));
+    const root = makeTempDir("walleterm-keychain-redact-");
     const binDir = join(root, "bin");
     mkdirSync(binDir, { recursive: true });
     const securityBin = join(binDir, "security");
@@ -218,7 +218,7 @@ process.exit(1);
   });
 
   it("errorMessage: runSecurity catch path surfaces stderr from a failing command", async () => {
-    const root = mkdtempSync(join(tmpdir(), "walleterm-keychain-errmsg-"));
+    const root = makeTempDir("walleterm-keychain-errmsg-");
     const binDir = join(root, "bin");
     mkdirSync(binDir, { recursive: true });
     const securityBin = join(binDir, "security");

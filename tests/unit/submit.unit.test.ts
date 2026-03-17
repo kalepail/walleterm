@@ -13,6 +13,17 @@ import type { ChannelsTransactionResponse } from "@openzeppelin/relayer-plugin-c
 import { SecretResolver } from "../../src/secrets.js";
 import { submitTxXdrViaRpc, submitViaChannels } from "../../src/submit.js";
 
+const TX_INPUT = { kind: "tx", envelope: { toXDR: () => "AAAA" } } as const;
+const TX_INPUT_B = { kind: "tx", envelope: { toXDR: () => "BBBB" } } as const;
+const TX_INPUT_C = { kind: "tx", envelope: { toXDR: () => "CCCC" } } as const;
+const BUNDLE_WITHOUT_FUNC = { kind: "bundle", func: undefined, auth: [] } as const;
+const BUNDLE_WITH_FUNC = {
+  kind: "bundle",
+  func: "AAAA",
+  auth: [{ toXDR: () => "AUTH1" }, { toXDR: () => "AUTH2" }],
+} as const;
+const AUTH_INPUT = { kind: "auth", auth: [{ toXDR: () => "AUTH1" }] } as const;
+
 describe("submit unit", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -21,7 +32,7 @@ describe("submit unit", () => {
   it("requires channels base URL", async () => {
     await expect(
       submitViaChannels(
-        { kind: "tx", envelope: { toXDR: () => "AAAA" } } as never,
+        TX_INPUT as any,
         { rpc_url: "https://rpc.invalid", network_passphrase: Networks.TESTNET },
         new SecretResolver("op"),
         {},
@@ -32,7 +43,7 @@ describe("submit unit", () => {
   it("requires channels API key", async () => {
     await expect(
       submitViaChannels(
-        { kind: "tx", envelope: { toXDR: () => "AAAA" } } as never,
+        TX_INPUT as any,
         {
           rpc_url: "https://rpc.invalid",
           network_passphrase: Networks.TESTNET,
@@ -52,7 +63,7 @@ describe("submit unit", () => {
     } satisfies ChannelsTransactionResponse);
 
     const result = await submitViaChannels(
-      { kind: "tx", envelope: { toXDR: () => "AAAA" } } as never,
+      TX_INPUT as any,
       {
         rpc_url: "https://rpc.invalid",
         network_passphrase: Networks.TESTNET,
@@ -80,7 +91,7 @@ describe("submit unit", () => {
     const resolveSpy = vi.spyOn(resolver, "resolve").mockResolvedValue("resolved-key");
 
     await submitViaChannels(
-      { kind: "tx", envelope: { toXDR: () => "AAAA" } } as never,
+      TX_INPUT as any,
       {
         rpc_url: "https://rpc.invalid",
         network_passphrase: Networks.TESTNET,
@@ -92,7 +103,7 @@ describe("submit unit", () => {
     expect(resolveSpy).toHaveBeenCalledWith("op://vault/item/key");
 
     await submitViaChannels(
-      { kind: "tx", envelope: { toXDR: () => "BBBB" } } as never,
+      TX_INPUT_B as any,
       {
         rpc_url: "https://rpc.invalid",
         network_passphrase: Networks.TESTNET,
@@ -105,7 +116,7 @@ describe("submit unit", () => {
     expect(resolveSpy).toHaveBeenCalledWith("op://vault/item/network_key");
 
     await submitViaChannels(
-      { kind: "tx", envelope: { toXDR: () => "CCCC" } } as never,
+      TX_INPUT_C as any,
       {
         rpc_url: "https://rpc.invalid",
         network_passphrase: Networks.TESTNET,
@@ -120,7 +131,7 @@ describe("submit unit", () => {
   it("handles bundle and auth submission validation", async () => {
     await expect(
       submitViaChannels(
-        { kind: "bundle", func: undefined, auth: [] } as never,
+        BUNDLE_WITHOUT_FUNC as any,
         {
           rpc_url: "https://rpc.invalid",
           network_passphrase: Networks.TESTNET,
@@ -140,11 +151,7 @@ describe("submit unit", () => {
       } satisfies ChannelsTransactionResponse);
 
     const bundleResult = await submitViaChannels(
-      {
-        kind: "bundle",
-        func: "AAAA",
-        auth: [{ toXDR: () => "AUTH1" }, { toXDR: () => "AUTH2" }],
-      } as never,
+      BUNDLE_WITH_FUNC as any,
       {
         rpc_url: "https://rpc.invalid",
         network_passphrase: Networks.TESTNET,
@@ -158,7 +165,7 @@ describe("submit unit", () => {
 
     await expect(
       submitViaChannels(
-        { kind: "auth", auth: [{ toXDR: () => "AUTH1" }] } as never,
+        AUTH_INPUT as any,
         {
           rpc_url: "https://rpc.invalid",
           network_passphrase: Networks.TESTNET,
@@ -173,7 +180,7 @@ describe("submit unit", () => {
   it("readDirectOrSecretRef rejects unsupported secret ref scheme", async () => {
     await expect(
       submitViaChannels(
-        { kind: "tx", envelope: { toXDR: () => "AAAA" } } as never,
+        TX_INPUT as any,
         {
           rpc_url: "https://rpc.invalid",
           network_passphrase: Networks.TESTNET,
@@ -208,7 +215,7 @@ describe("submit unit", () => {
       hash: "rpc-hash",
       latestLedger: 123,
       latestLedgerCloseTime: 456,
-    } as never);
+    } as any);
 
     const out = await submitTxXdrViaRpc(tx.toXDR(), {
       rpc_url: "https://rpc.invalid",

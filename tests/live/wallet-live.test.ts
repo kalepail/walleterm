@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { execa } from "execa";
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Address, Asset, Keypair, Networks, rpc, xdr } from "@stellar/stellar-sdk";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 const maybeDescribe = process.env.WALLETERM_LIVE === "1" ? describe : describe.skip;
 
@@ -256,7 +256,7 @@ maybeDescribe("walleterm live checks", () => {
           const keyData = (await keyResponse.json()) as { apiKey?: string };
           expect(typeof keyData.apiKey).toBe("string");
 
-          const rootDir = mkdtempSync(join(tmpdir(), "walleterm-live-submit-"));
+          const rootDir = makeTempDir("walleterm-live-submit-");
           const configPath = join(rootDir, "walleterm.toml");
           const opBinDir = join(rootDir, "bin");
           const opBinPath = join(opBinDir, "op");
@@ -391,7 +391,7 @@ network_passphrase = "${Networks.TESTNET}"
           const keyData = (await keyResponse.json()) as { apiKey?: string };
           expect(typeof keyData.apiKey).toBe("string");
 
-          const rootDir = mkdtempSync(join(tmpdir(), "walleterm-live-payment-"));
+          const rootDir = makeTempDir("walleterm-live-payment-");
           const configPath = join(rootDir, "walleterm.toml");
           const opBinDir = join(rootDir, "bin");
           const opBinPath = join(opBinDir, "op");

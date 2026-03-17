@@ -1,10 +1,10 @@
 import { execa } from "execa";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Address, Asset, Keypair, Networks, xdr } from "@stellar/stellar-sdk";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 const maybeDescribe =
   process.env.WALLETERM_LIVE === "1" && process.env.WALLETERM_LIVE_KEYCHAIN === "1"
@@ -188,7 +188,7 @@ maybeDescribe("walleterm live macOS keychain integration", () => {
     "creates and submits a new wallet on testnet using keychain:// refs and sends a native payment via smart account",
     { timeout: 240_000 },
     async () => {
-      const rootDir = mkdtempSync(join(tmpdir(), "walleterm-keychain-live-"));
+      const rootDir = makeTempDir("walleterm-keychain-live-");
       const configPath = join(rootDir, "walleterm.toml");
       const deployXdrPath = join(rootDir, "deploy.tx.xdr");
       const signerBundlePath = join(rootDir, "add-signer.bundle.json");

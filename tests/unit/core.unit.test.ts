@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeTempDir } from "../helpers/temp-dir.js";
 import {
   Account,
   Address,
@@ -175,7 +175,7 @@ function makeContext(opts?: {
 }
 
 function tempFile(content: string): string {
-  const dir = mkdtempSync(join(tmpdir(), "walleterm-core-unit-"));
+  const dir = makeTempDir("walleterm-core-unit-");
   const path = join(dir, "input.txt");
   writeFileSync(path, content, "utf8");
   return path;

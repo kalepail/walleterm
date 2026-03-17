@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, chmodSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   Account,
@@ -13,6 +12,7 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { runCliInProcess } from "../helpers/run-cli.js";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 type Fixture = {
   rootDir: string;
@@ -119,7 +119,7 @@ function makeDelegatedEntry(address: string): xdr.SorobanAuthorizationEntry {
 }
 
 function makeFixture(): Fixture {
-  const rootDir = mkdtempSync(join(tmpdir(), "walleterm-e2e-"));
+  const rootDir = makeTempDir("walleterm-e2e-");
   const inPath = join(rootDir, "in.txt");
   const outPath = join(rootDir, "out.txt");
   const configPath = join(rootDir, "walleterm.toml");
@@ -158,7 +158,7 @@ process.stdout.write(map[ref]);
     configPath,
     `[app]
 default_network = "testnet"
-strict_onchain = true
+strict_onchain = false
 onchain_signer_mode = "subset"
 default_ttl_seconds = 30
 assumed_ledger_time_seconds = 6

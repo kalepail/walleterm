@@ -1,7 +1,7 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { makeTempDir } from "../helpers/temp-dir.js";
 import {
   SecretResolver,
   buildKeychainSecretRef,
@@ -9,7 +9,7 @@ import {
 } from "../../src/secrets.js";
 
 function makeExecutableScript(name: string, contents: string): { binPath: string; root: string } {
-  const root = mkdtempSync(join(tmpdir(), "walleterm-secrets-unit-"));
+  const root = makeTempDir("walleterm-secrets-unit-");
   const binPath = join(root, name);
   writeFileSync(binPath, contents, "utf8");
   chmodSync(binPath, 0o755);
@@ -28,7 +28,7 @@ function makeSecurityScript(contents: string): { securityBin: string; root: stri
 
 describe("secrets unit", () => {
   it("resolves and caches op:// refs", async () => {
-    const countPath = join(mkdtempSync(join(tmpdir(), "walleterm-secrets-count-")), "count.txt");
+    const countPath = join(makeTempDir("walleterm-secrets-count-"), "count.txt");
     writeFileSync(countPath, "0", "utf8");
     const { opBin } = makeOpScript(`#!/usr/bin/env node
 const fs = require("node:fs");
@@ -114,7 +114,7 @@ process.exit(1);
   });
 
   it("resolves and caches keychain refs", async () => {
-    const countPath = join(mkdtempSync(join(tmpdir(), "walleterm-keychain-count-")), "count.txt");
+    const countPath = join(makeTempDir("walleterm-keychain-count-"), "count.txt");
     writeFileSync(countPath, "0", "utf8");
     const { securityBin } = makeSecurityScript(`#!/usr/bin/env node
 const fs = require("node:fs");
@@ -239,7 +239,7 @@ process.exit(1);
   });
 
   it("clearCache causes a second resolve to call the provider again", async () => {
-    const countPath = join(mkdtempSync(join(tmpdir(), "walleterm-secrets-clear-")), "count.txt");
+    const countPath = join(makeTempDir("walleterm-secrets-clear-"), "count.txt");
     writeFileSync(countPath, "0", "utf8");
     const { opBin } = makeOpScript(`#!/usr/bin/env node
 const fs = require("node:fs");

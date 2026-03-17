@@ -1,10 +1,10 @@
 import { execa } from "execa";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Address, Asset, Keypair, Networks, xdr } from "@stellar/stellar-sdk";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 const maybeDescribe =
   process.env.WALLETERM_LIVE === "1" && process.env.WALLETERM_LIVE_OP === "1"
@@ -235,7 +235,7 @@ maybeDescribe("walleterm live 1Password integration", () => {
       const delegatedSeed = await opRead(delegatedRef);
       const delegatedSigner = Keypair.fromSecret(delegatedSeed);
 
-      const rootDir = mkdtempSync(join(tmpdir(), "walleterm-op-live-"));
+      const rootDir = makeTempDir("walleterm-op-live-");
       const configPath = join(rootDir, "walleterm.toml");
       const deployXdrPath = join(rootDir, "deploy.tx.xdr");
       const signerBundlePath = join(rootDir, "add-signer.bundle.json");

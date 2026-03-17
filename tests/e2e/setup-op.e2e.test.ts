@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Keypair } from "@stellar/stellar-sdk";
 import { smartAccountKitDeployerKeypair } from "../../src/wallet.js";
 import { runCliInProcess } from "../helpers/run-cli.js";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 type Fixture = {
   env: NodeJS.ProcessEnv;
@@ -13,7 +13,7 @@ type Fixture = {
 };
 
 function makeFixture(mode: "create" | "edit", signedIn = true): Fixture {
-  const rootDir = mkdtempSync(join(tmpdir(), "walleterm-setup-op-e2e-"));
+  const rootDir = makeTempDir("walleterm-setup-op-e2e-");
   const binDir = join(rootDir, "bin");
   mkdirSync(binDir, { recursive: true });
   const logPath = join(rootDir, "op.log");

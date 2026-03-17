@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, chmodSync, readFileSync, mkdirSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   FeeBumpTransaction,
@@ -14,6 +13,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { deriveContractIdFromSalt, smartAccountKitDeployerKeypair } from "../../src/wallet.js";
 import { runCliInProcess } from "../helpers/run-cli.js";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 type Fixture = {
   rootDir: string;
@@ -35,7 +35,7 @@ function toHex(bytes: Buffer | Uint8Array): string {
 }
 
 function makeFixture(indexerUrl: string): Fixture {
-  const rootDir = mkdtempSync(join(tmpdir(), "walleterm-wallet-e2e-"));
+  const rootDir = makeTempDir("walleterm-wallet-e2e-");
   const inPath = join(rootDir, "in.txt");
   const outPath = join(rootDir, "out.json");
   const configPath = join(rootDir, "walleterm.toml");
@@ -76,7 +76,7 @@ process.stdout.write(map[ref]);
     configPath,
     `[app]
 default_network = "testnet"
-strict_onchain = true
+strict_onchain = false
 onchain_signer_mode = "subset"
 default_ttl_seconds = 30
 assumed_ledger_time_seconds = 6

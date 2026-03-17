@@ -1,7 +1,7 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { makeTempDir } from "../helpers/temp-dir.js";
 import {
   findAccountByContractId,
   loadConfig,
@@ -10,7 +10,7 @@ import {
 } from "../../src/config.js";
 
 function writeConfig(contents: string): string {
-  const root = mkdtempSync(join(tmpdir(), "walleterm-config-unit-"));
+  const root = makeTempDir("walleterm-config-unit-");
   const path = join(root, "walleterm.toml");
   writeFileSync(path, contents, "utf8");
   return path;

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   Account,
@@ -14,6 +13,7 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { runCliInProcess } from "../helpers/run-cli.js";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 type Fixture = {
   configPath: string;
@@ -52,7 +52,7 @@ function makeFixture(
   channelsRef = "op://vault/channels/api_key",
   channelsKey = "test-channels-key",
 ): Fixture {
-  const rootDir = mkdtempSync(join(tmpdir(), "walleterm-submit-e2e-"));
+  const rootDir = makeTempDir("walleterm-submit-e2e-");
   const inPath = join(rootDir, "in.txt");
   const outPath = join(rootDir, "out.txt");
   const configPath = join(rootDir, "walleterm.toml");

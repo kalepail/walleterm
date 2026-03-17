@@ -1,11 +1,11 @@
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultItemForNetwork, setupOnePasswordForWallet } from "../../src/op-setup.js";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 function makeOpBin(mode: "ok" | "fail-whoami-stderr"): string {
-  const root = mkdtempSync(join(tmpdir(), "walleterm-op-setup-unit-"));
+  const root = makeTempDir("walleterm-op-setup-unit-");
   const binDir = join(root, "bin");
   mkdirSync(binDir, { recursive: true });
   const opBin = join(binDir, "op");
@@ -221,7 +221,7 @@ describe("op-setup unit", () => {
 
     await expect(
       setupOnePasswordForWallet({
-        opBin: join(tmpdir(), "definitely-missing-op-binary"),
+        opBin: join(makeTempDir("walleterm-missing-op-"), "definitely-missing-op-binary"),
         vault: "Private",
         item: "walleterm-testnet",
         network: "testnet",
@@ -233,7 +233,7 @@ describe("op-setup unit", () => {
   });
 
   it("redacts [password]= values in error messages", async () => {
-    const root = mkdtempSync(join(tmpdir(), "walleterm-op-redact-"));
+    const root = makeTempDir("walleterm-op-redact-");
     const binDir = join(root, "bin");
     mkdirSync(binDir, { recursive: true });
     const opBin = join(binDir, "op");

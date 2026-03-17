@@ -1,6 +1,6 @@
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { makeTempDir } from "./temp-dir.js";
 
 export interface FakeSecurityFixture {
   env: NodeJS.ProcessEnv;
@@ -33,7 +33,7 @@ export function readSecurityCalls(logPath: string): string[][] {
 export function makeFakeSecurityFixture(
   initialStore: Record<string, string> = {},
 ): FakeSecurityFixture {
-  const rootDir = mkdtempSync(join(tmpdir(), "walleterm-fake-security-"));
+  const rootDir = makeTempDir("walleterm-fake-security-");
   const binDir = join(rootDir, "bin");
   mkdirSync(binDir, { recursive: true });
 

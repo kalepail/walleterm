@@ -1,15 +1,15 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Keypair } from "@stellar/stellar-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeFakeSecurityFixture } from "../helpers/fake-security.js";
 import { runCliInProcess } from "../helpers/run-cli.js";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
-vi.mock("../../src/x402.js", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
+vi.mock("../../src/x402.js", async () => {
   return {
-    ...actual,
+    passphraseToX402Network: vi.fn(() => "stellar:testnet"),
+    createWalletermSigner: vi.fn(() => ({ address: "GMOCK" })),
     createX402HttpHandler: vi.fn(() => ({})),
     executeX402Request: vi.fn(async () => ({
       paid: true,
@@ -32,6 +32,8 @@ vi.mock("../../src/x402.js", async (importOriginal) => {
 });
 
 const { executeX402Request } = await import("../../src/x402.js");
+const executeX402RequestMock = executeX402Request as ReturnType<typeof vi.fn>;
+const PAYMENT_PAYLOAD = { x402Version: 2, accepted: {}, payload: {} };
 
 type Fixture = {
   configPath: string;
@@ -41,7 +43,7 @@ type Fixture = {
 
 function makeFixture(extraToml = "", secretOverride?: { ref: string; value: string }): Fixture {
   const keypair = Keypair.random();
-  const rootDir = mkdtempSync(join(tmpdir(), "walleterm-pay-e2e-"));
+  const rootDir = makeTempDir("walleterm-pay-e2e-");
 
   const fake = makeFakeSecurityFixture();
   const value = secretOverride?.value ?? keypair.secret();
@@ -70,7 +72,7 @@ ${extraToml}`;
 
 describe("walleterm pay e2e", () => {
   beforeEach(() => {
-    vi.mocked(executeX402Request).mockClear();
+    executeX402RequestMock.mockClear();
   });
 
   it("errors when no payer is specified", async () => {
@@ -135,13 +137,13 @@ describe("walleterm pay e2e", () => {
     expect(result.stdout).toBe("paid content");
     // Default mock has no content-type header, so stderr should be empty
     expect(result.stderr).toBe("");
-    expect(vi.mocked(executeX402Request)).toHaveBeenCalledTimes(1);
+    expect(executeX402RequestMock).toHaveBeenCalledTimes(1);
   });
 
   it("--format body writes content-type to stderr when present", async () => {
     const { configPath, env } = makeFixture();
 
-    vi.mocked(executeX402Request).mockResolvedValueOnce({
+    executeX402RequestMock.mockResolvedValueOnce({
       paid: true,
       status: 200,
       body: new TextEncoder().encode("image data"),
@@ -151,7 +153,7 @@ describe("walleterm pay e2e", () => {
         resource: { url: "https://example.com" },
         accepts: [],
       },
-      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      paymentPayload: PAYMENT_PAYLOAD,
       settlement: {
         success: true,
         transaction: "txhash",
@@ -211,7 +213,7 @@ describe("walleterm pay e2e", () => {
 
   it("passes dry-run option to executeX402Request", async () => {
     const { configPath, env } = makeFixture();
-    vi.mocked(executeX402Request).mockResolvedValueOnce({
+    executeX402RequestMock.mockResolvedValueOnce({
       paid: false,
       status: 402,
       body: new TextEncoder().encode("402 body"),
@@ -236,7 +238,7 @@ describe("walleterm pay e2e", () => {
       ],
       env,
     );
-    const callOpts = vi.mocked(executeX402Request).mock.calls[0]?.[1];
+    const callOpts = executeX402RequestMock.mock.calls[0]?.[1];
     expect(callOpts?.dryRun).toBe(true);
     const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(parsed.paid).toBe(false);
@@ -263,7 +265,7 @@ describe("walleterm pay e2e", () => {
       ],
       env,
     );
-    const callOpts = vi.mocked(executeX402Request).mock.calls[0]?.[1];
+    const callOpts = executeX402RequestMock.mock.calls[0]?.[1];
     expect(callOpts?.method).toBe("POST");
     expect(callOpts?.headers).toEqual({
       "Content-Type": "application/json",
@@ -274,7 +276,7 @@ describe("walleterm pay e2e", () => {
 
   it("uses default_payer_secret_ref from config", async () => {
     const keypair = Keypair.random();
-    const rootDir = mkdtempSync(join(tmpdir(), "walleterm-pay-e2e-"));
+    const rootDir = makeTempDir("walleterm-pay-e2e-");
     const fake = makeFakeSecurityFixture();
     const storeKey = "walleterm-test::default_payer";
     writeFileSync(fake.storePath, JSON.stringify({ [storeKey]: keypair.secret() }), "utf8");
@@ -315,16 +317,16 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
       ],
       env,
     );
-    const callOpts = vi.mocked(executeX402Request).mock.calls[0]?.[1];
+    const callOpts = executeX402RequestMock.mock.calls[0]?.[1];
     expect(callOpts?.headers).toBeUndefined();
   });
 
   it("writes body to file and prints JSON summary with --out", async () => {
     const { configPath, env, keypair } = makeFixture();
-    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outDir = makeTempDir("walleterm-pay-out-");
     const outPath = join(outDir, "response.bin");
 
-    vi.mocked(executeX402Request).mockResolvedValueOnce({
+    executeX402RequestMock.mockResolvedValueOnce({
       paid: true,
       status: 200,
       body: new TextEncoder().encode("paid content"),
@@ -334,7 +336,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
         resource: { url: "https://example.com" },
         accepts: [],
       },
-      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      paymentPayload: PAYMENT_PAYLOAD,
       settlement: {
         success: true,
         transaction: "txhash",
@@ -378,13 +380,13 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
 
   it("--out writes binary data without corruption", async () => {
     const { configPath, env } = makeFixture();
-    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outDir = makeTempDir("walleterm-pay-out-");
     const outPath = join(outDir, "binary.dat");
 
     // Create binary content with bytes that would corrupt in text mode
     const binaryBody = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]);
 
-    vi.mocked(executeX402Request).mockResolvedValueOnce({
+    executeX402RequestMock.mockResolvedValueOnce({
       paid: true,
       status: 200,
       body: binaryBody,
@@ -394,7 +396,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
         resource: { url: "https://example.com" },
         accepts: [],
       },
-      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      paymentPayload: PAYMENT_PAYLOAD,
       settlement: {
         success: true,
         transaction: "txhash",
@@ -429,10 +431,10 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
 
   it("--out with no content-type header outputs null content_type", async () => {
     const { configPath, env, keypair } = makeFixture();
-    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outDir = makeTempDir("walleterm-pay-out-");
     const outPath = join(outDir, "output.bin");
 
-    vi.mocked(executeX402Request).mockResolvedValueOnce({
+    executeX402RequestMock.mockResolvedValueOnce({
       paid: true,
       status: 200,
       body: new TextEncoder().encode("data"),
@@ -442,7 +444,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
         resource: { url: "https://example.com" },
         accepts: [],
       },
-      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      paymentPayload: PAYMENT_PAYLOAD,
       settlement: {
         success: true,
         transaction: "txhash",
@@ -473,10 +475,10 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
 
   it("--out with no settlement outputs null settlement", async () => {
     const { configPath, env } = makeFixture();
-    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outDir = makeTempDir("walleterm-pay-out-");
     const outPath = join(outDir, "output.bin");
 
-    vi.mocked(executeX402Request).mockResolvedValueOnce({
+    executeX402RequestMock.mockResolvedValueOnce({
       paid: true,
       status: 200,
       body: new TextEncoder().encode("data"),
@@ -486,7 +488,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
         resource: { url: "https://example.com" },
         accepts: [],
       },
-      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      paymentPayload: PAYMENT_PAYLOAD,
     });
 
     const result = await runCliInProcess(
@@ -511,10 +513,10 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
 
   it("--out takes priority over --format json", async () => {
     const { configPath, env, keypair } = makeFixture();
-    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outDir = makeTempDir("walleterm-pay-out-");
     const outPath = join(outDir, "output.bin");
 
-    vi.mocked(executeX402Request).mockResolvedValueOnce({
+    executeX402RequestMock.mockResolvedValueOnce({
       paid: true,
       status: 200,
       body: new TextEncoder().encode("file content"),
@@ -524,7 +526,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
         resource: { url: "https://example.com" },
         accepts: [],
       },
-      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      paymentPayload: PAYMENT_PAYLOAD,
       settlement: {
         success: true,
         transaction: "txhash",
@@ -560,10 +562,10 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
 
   it("--out with empty body writes zero-byte file", async () => {
     const { configPath, env } = makeFixture();
-    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outDir = makeTempDir("walleterm-pay-out-");
     const outPath = join(outDir, "empty.bin");
 
-    vi.mocked(executeX402Request).mockResolvedValueOnce({
+    executeX402RequestMock.mockResolvedValueOnce({
       paid: true,
       status: 200,
       body: new Uint8Array(0),
@@ -573,8 +575,8 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
         resource: { url: "https://example.com" },
         accepts: [],
       },
-      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
-      settlement: null as never,
+      paymentPayload: PAYMENT_PAYLOAD,
+      settlement: null,
     });
 
     const result = await runCliInProcess(
@@ -602,7 +604,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
 
   it("exposes settlement_error in JSON output when settlement parsing fails", async () => {
     const { configPath, env } = makeFixture();
-    vi.mocked(executeX402Request).mockResolvedValueOnce({
+    executeX402RequestMock.mockResolvedValueOnce({
       paid: true,
       status: 200,
       body: new TextEncoder().encode("paid content"),
@@ -612,7 +614,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
         resource: { url: "https://example.com" },
         accepts: [],
       },
-      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      paymentPayload: PAYMENT_PAYLOAD,
       settlementError: "No PAYMENT-RESPONSE header",
     });
 
@@ -637,10 +639,10 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
 
   it("exposes settlement_error in --out summary when settlement parsing fails", async () => {
     const { configPath, env } = makeFixture();
-    const outDir = mkdtempSync(join(tmpdir(), "walleterm-pay-out-"));
+    const outDir = makeTempDir("walleterm-pay-out-");
     const outPath = join(outDir, "response.bin");
 
-    vi.mocked(executeX402Request).mockResolvedValueOnce({
+    executeX402RequestMock.mockResolvedValueOnce({
       paid: true,
       status: 200,
       body: new TextEncoder().encode("paid content"),
@@ -650,7 +652,7 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
         resource: { url: "https://example.com" },
         accepts: [],
       },
-      paymentPayload: { x402Version: 2, accepted: {}, payload: {} } as never,
+      paymentPayload: PAYMENT_PAYLOAD,
       settlementError: "No PAYMENT-RESPONSE header",
     });
 
