@@ -3,6 +3,13 @@ import { Address, hash, xdr } from "@stellar/stellar-sdk";
 import type { RuntimeDelegatedSigner, RuntimeSigners } from "./types.js";
 import { compositeExternalKey } from "./runtime-signers.js";
 
+export class UnsupportedSmartAccountSignatureShapeError extends Error {
+  constructor() {
+    super("Unsupported signature ScVal shape for smart-account entry");
+    this.name = "UnsupportedSmartAccountSignatureShapeError";
+  }
+}
+
 export function withExpiration(
   entry: xdr.SorobanAuthorizationEntry,
   expirationLedger: number,
@@ -106,12 +113,12 @@ export function ensureSignatureMap(credentials: xdr.SorobanAddressCredentials): 
   }
 
   if (signature.switch().name !== "scvVec") {
-    throw new Error("Unsupported signature ScVal shape for smart-account entry");
+    throw new UnsupportedSmartAccountSignatureShapeError();
   }
 
   const vec = signature.vec()!;
   if (vec.length === 0 || vec[0]!.switch().name !== "scvMap") {
-    throw new Error("Unsupported signature ScVal shape for smart-account entry");
+    throw new UnsupportedSmartAccountSignatureShapeError();
   }
 
   return vec[0]!.map()!;

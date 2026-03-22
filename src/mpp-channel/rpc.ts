@@ -83,15 +83,19 @@ export async function simulateGetter(
 }
 
 function isEnumVariant(scVal: xdr.ScVal, name: string): boolean {
+  if (scVal.switch().value !== xdr.ScValType.scvVec().value) return false;
+  const vec = scVal.vec();
+  if (!vec || vec.length !== 1) return false;
+  return (
+    vec[0]?.switch().value === xdr.ScValType.scvSymbol().value && vec[0].sym().toString() === name
+  );
+}
+
+function tryParseContractAddress(channelId: string): Address | null {
   try {
-    if (scVal.switch().value !== xdr.ScValType.scvVec().value) return false;
-    const vec = scVal.vec();
-    if (!vec || vec.length !== 1) return false;
-    return (
-      vec[0]?.switch().value === xdr.ScValType.scvSymbol().value && vec[0].sym().toString() === name
-    );
+    return Address.fromString(channelId);
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -99,27 +103,35 @@ export async function readCloseEffectiveAtLedger(
   server: rpc.Server,
   channelId: string,
 ): Promise<number | null> {
-  try {
-    const contractId = Address.fromString(channelId);
-    const key = xdr.LedgerKey.contractData(
-      new xdr.LedgerKeyContractData({
-        contract: contractId.toScAddress(),
-        key: xdr.ScVal.scvLedgerKeyContractInstance(),
-        durability: xdr.ContractDataDurability.persistent(),
-      }),
-    );
-    const response = await server.getLedgerEntries(key);
-    const entry = response.entries?.[0];
-    if (!entry) return null;
-    const storage = entry.val.contractData().val().instance().storage();
-    if (!storage) return null;
-    for (const row of storage) {
-      if (isEnumVariant(row.key(), "CloseEffectiveAtLedger")) {
-        return row.val().u32();
+  const contractId = tryParseContractAddress(channelId);
+  if (!contractId) return null;
+
+  const key = xdr.LedgerKey.contractData(
+    new xdr.LedgerKeyContractData({
+      contract: contractId.toScAddress(),
+      key: xdr.ScVal.scvLedgerKeyContractInstance(),
+      durability: xdr.ContractDataDurability.persistent(),
+    }),
+  );
+  const response = await server.getLedgerEntries(key);
+  const entry = response.entries?.[0];
+  if (!entry) return null;
+
+  const contractData = entry.val?.contractData?.();
+  const contractValue = contractData?.val?.();
+  const instance = contractValue?.instance?.();
+  const storage = instance?.storage?.();
+  if (!storage) return null;
+
+  for (const row of storage) {
+    if (isEnumVariant(row.key(), "CloseEffectiveAtLedger")) {
+      const value = row.val();
+      if (value.switch().value !== xdr.ScValType.scvU32().value) {
+        return null;
       }
+      return value.u32();
     }
-    return null;
-  } catch {
-    return null;
   }
+
+  return null;
 }

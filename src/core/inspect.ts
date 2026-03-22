@@ -4,6 +4,7 @@ import { selectAccountForAddress } from "./accounts.js";
 import {
   ensureSignatureMap,
   hasMatchingSignerInSignatureMap,
+  UnsupportedSmartAccountSignatureShapeError,
   withExpiration,
 } from "./smart-account.js";
 import { collectSigningAddresses, getEnvelopeOperations } from "./transactions.js";
@@ -93,8 +94,11 @@ function canSignAuthEntry(
       }
 
       return hasMatchingSignerInSignatureMap(sigMap, context.runtimeSigners);
-    } catch {
-      return { signable: false, reason: "unsupported smart-account signature map shape" };
+    } catch (error) {
+      if (error instanceof UnsupportedSmartAccountSignatureShapeError) {
+        return { signable: false, reason: "unsupported smart-account signature map shape" };
+      }
+      throw error;
     }
   }
 

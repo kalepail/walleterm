@@ -171,4 +171,15 @@ describe("mpp-channel rpc helpers", () => {
     ).resolves.toBeNull();
     await expect(readCloseEffectiveAtLedger(server, "not-a-channel-id")).resolves.toBeNull();
   });
+
+  it("surfaces ledger RPC failures while still tolerating invalid channel ids", async () => {
+    const server = {
+      getLedgerEntries: vi.fn().mockRejectedValue(new Error("rpc unavailable")),
+    } as unknown as rpc.Server;
+
+    await expect(
+      readCloseEffectiveAtLedger(server, StrKey.encodeContract(Buffer.alloc(32, 6))),
+    ).rejects.toThrow(/rpc unavailable/i);
+    await expect(readCloseEffectiveAtLedger(server, "not-a-channel-id")).resolves.toBeNull();
+  });
 });
