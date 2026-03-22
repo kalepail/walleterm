@@ -342,7 +342,7 @@ describe("wallet unit", () => {
     if (!addr || typeof addr === "string") throw new Error("server failed to bind");
     const base = `http://127.0.0.1:${addr.port}`;
 
-    await expect(discoverContractsByAddress(base, "GABC")).rejects.toThrow();
+    await expect(discoverContractsByAddress(base, "GABC")).rejects.toThrow(/.+/);
 
     await new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve())),

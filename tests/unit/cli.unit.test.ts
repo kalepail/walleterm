@@ -527,9 +527,15 @@ describe("cli unit", () => {
       mode: "exact",
       ok: false,
       configured: { delegated: [], external: [] },
-      onchain: { delegated: [], external: [{ verifier_contract_id: CONTRACT_ID, public_key_hex: "aa".repeat(32) }] },
+      onchain: {
+        delegated: [],
+        external: [{ verifier_contract_id: CONTRACT_ID, public_key_hex: "aa".repeat(32) }],
+      },
       missing: { delegated: [], external: [] },
-      extra: { delegated: [], external: [{ verifier_contract_id: CONTRACT_ID, public_key_hex: "aa".repeat(32) }] },
+      extra: {
+        delegated: [],
+        external: [{ verifier_contract_id: CONTRACT_ID, public_key_hex: "aa".repeat(32) }],
+      },
     });
 
     await expect(run(["sign", "--in", "in.txt", "--out", "out.txt"])).rejects.toThrow(
@@ -681,7 +687,14 @@ describe("cli unit", () => {
   });
 
   it("setup ssh-agent discovery prints verbose output and supports json", async () => {
-    const res = await run(["setup", "ssh-agent", "--backend", "system", "--socket", "/tmp/custom.sock"]);
+    const res = await run([
+      "setup",
+      "ssh-agent",
+      "--backend",
+      "system",
+      "--socket",
+      "/tmp/custom.sock",
+    ]);
 
     expect(mockSetupSshAgentForWallet).toHaveBeenCalledWith({
       backend: "system",
@@ -1490,7 +1503,9 @@ describe("cli unit", () => {
         "--out",
         "out.xdr",
       ]),
-    ).rejects.toThrow(/No wasm hash provided\. Pass --wasm-hash or set smart_accounts\.treasury\.expected_wasm_hash/i);
+    ).rejects.toThrow(
+      /No wasm hash provided\. Pass --wasm-hash or set smart_accounts\.treasury\.expected_wasm_hash/i,
+    );
   });
 
   it("wallet create rejects mismatched expected_wasm_hash and auto-submits when default_submit_mode is channels", async () => {

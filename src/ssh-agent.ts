@@ -48,7 +48,12 @@ function buildRequestIdentities(): Buffer {
 
 function buildSignRequest(keyBlob: Buffer, data: Buffer, flags = 0): Buffer {
   const type = Buffer.from([SSH2_AGENTC_SIGN_REQUEST]);
-  const content = Buffer.concat([type, writeString(keyBlob), writeString(data), writeUint32(flags)]);
+  const content = Buffer.concat([
+    type,
+    writeString(keyBlob),
+    writeString(data),
+    writeUint32(flags),
+  ]);
   return Buffer.concat([writeUint32(content.length), content]);
 }
 
@@ -155,10 +160,7 @@ export function resolveSocketPath(backend: string, explicit?: string): string {
 
   if (backend === "1password") {
     if (process.platform === "darwin") {
-      return join(
-        homedir(),
-        "Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock",
-      );
+      return join(homedir(), "Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock");
     }
     return join(homedir(), ".1password/agent.sock");
   }
@@ -174,9 +176,7 @@ export function resolveSocketPath(backend: string, explicit?: string): string {
   }
 
   if (backend === "custom") {
-    throw new Error(
-      "Custom SSH agent backend requires an explicit socket path via ?socket=<path>",
-    );
+    throw new Error("Custom SSH agent backend requires an explicit socket path via ?socket=<path>");
   }
 
   throw new Error(
@@ -275,9 +275,7 @@ function parseSignResponse(data: Buffer): Buffer {
     return Buffer.from(rawSig);
   } catch (err) {
     if (err instanceof Error && !err.message.startsWith("Unexpected ")) {
-      throw new Error(
-        `Malformed SSH agent sign response: ${err.message}`,
-      );
+      throw new Error(`Malformed SSH agent sign response: ${err.message}`);
     }
     /* v8 ignore next -- malformed frame errors in practice always throw Error objects */
     throw err;

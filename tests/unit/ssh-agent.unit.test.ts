@@ -242,9 +242,7 @@ describe("resolveSocketPath", () => {
   });
 
   it("throws for unknown backend without explicit socket", () => {
-    expect(() => resolveSocketPath("foobar")).toThrow(
-      /Unknown SSH agent backend 'foobar'/,
-    );
+    expect(() => resolveSocketPath("foobar")).toThrow(/Unknown SSH agent backend 'foobar'/);
   });
 });
 
@@ -523,14 +521,8 @@ describe("agentSign error paths", () => {
 
   it("throws on wrong signature algorithm", async () => {
     const SSH2_AGENT_SIGN_RESPONSE = 14;
-    const sigBlob = Buffer.concat([
-      writeString("ssh-rsa"),
-      writeString(Buffer.alloc(64, 0xab)),
-    ]);
-    const body = Buffer.concat([
-      Buffer.from([SSH2_AGENT_SIGN_RESPONSE]),
-      writeString(sigBlob),
-    ]);
+    const sigBlob = Buffer.concat([writeString("ssh-rsa"), writeString(Buffer.alloc(64, 0xab))]);
+    const body = Buffer.concat([Buffer.from([SSH2_AGENT_SIGN_RESPONSE]), writeString(sigBlob)]);
 
     const mock = await makeFixedReplyServer(frameResponse(body));
     pendingCleanups.push(mock.cleanup);
@@ -547,10 +539,7 @@ describe("agentSign error paths", () => {
       writeString("ssh-ed25519"),
       writeString(Buffer.alloc(32, 0xcd)), // 32 instead of 64
     ]);
-    const body = Buffer.concat([
-      Buffer.from([SSH2_AGENT_SIGN_RESPONSE]),
-      writeString(sigBlob),
-    ]);
+    const body = Buffer.concat([Buffer.from([SSH2_AGENT_SIGN_RESPONSE]), writeString(sigBlob)]);
 
     const mock = await makeFixedReplyServer(frameResponse(body));
     pendingCleanups.push(mock.cleanup);
@@ -563,10 +552,7 @@ describe("agentSign error paths", () => {
 
   it("wraps malformed sign responses that break top-level parsing", async () => {
     const SSH2_AGENT_SIGN_RESPONSE = 14;
-    const body = Buffer.concat([
-      Buffer.from([SSH2_AGENT_SIGN_RESPONSE]),
-      Buffer.from([0x00]),
-    ]);
+    const body = Buffer.concat([Buffer.from([SSH2_AGENT_SIGN_RESPONSE]), Buffer.from([0x00])]);
 
     const mock = await makeFixedReplyServer(frameResponse(body));
     pendingCleanups.push(mock.cleanup);
@@ -627,10 +613,7 @@ describe("chunked data reception", () => {
   it("handles response where first chunk has exactly length header", async () => {
     // Build a valid identities response with zero keys
     const SSH2_AGENT_IDENTITIES_ANSWER = 12;
-    const body = Buffer.concat([
-      Buffer.from([SSH2_AGENT_IDENTITIES_ANSWER]),
-      writeUint32(0),
-    ]);
+    const body = Buffer.concat([Buffer.from([SSH2_AGENT_IDENTITIES_ANSWER]), writeUint32(0)]);
     const fullResponse = frameResponse(body);
 
     const root = makeTempDir("walleterm-ssh-agent-split-");
@@ -670,7 +653,11 @@ describe("already-resolved guard branches", () => {
     const origSetTimeout = globalThis.setTimeout;
     const origClearTimeout = globalThis.clearTimeout;
 
-    globalThis.setTimeout = ((fn: (...args: unknown[]) => void, _delay?: number, ...args: unknown[]) => {
+    globalThis.setTimeout = ((
+      fn: (...args: unknown[]) => void,
+      _delay?: number,
+      ...args: unknown[]
+    ) => {
       return origSetTimeout(fn, 20, ...args);
     }) as typeof globalThis.setTimeout;
     globalThis.clearTimeout = (() => {
@@ -701,9 +688,7 @@ describe("already-resolved guard branches", () => {
 describe("connection errors", () => {
   it("rejects when socket path does not exist", async () => {
     const noSuchPath = join(makeTempDir("walleterm-no-sock-"), "nonexistent.sock");
-    await expect(listAgentIdentities(noSuchPath)).rejects.toThrow(
-      /SSH agent connection failed/,
-    );
+    await expect(listAgentIdentities(noSuchPath)).rejects.toThrow(/SSH agent connection failed/);
   });
 
   it("rejects when the server closes after receiving data (premature close)", async () => {

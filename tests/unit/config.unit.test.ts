@@ -325,52 +325,46 @@ contract_id = "CTESTACCOUNTA"
     stderrSpy.mockRestore();
   });
 
-  it("loads x402 config section when present", () => {
+  it("rejects the removed top-level x402 config section", () => {
     const cfg = `${BASE_CONFIG}
 [x402]
 default_payer_secret_ref = "op://Private/testnet/payer_seed"
 `;
-    const config = loadConfig(writeConfig(cfg));
-    expect(config.x402?.default_payer_secret_ref).toBe("op://Private/testnet/payer_seed");
-  });
-
-  it("loads config without x402 section", () => {
-    const config = loadConfig(writeConfig(BASE_CONFIG));
-    expect(config.x402).toBeUndefined();
-  });
-
-  it("loads x402 section with no default_payer_secret_ref", () => {
-    const cfg = `${BASE_CONFIG}
-[x402]
-`;
-    const config = loadConfig(writeConfig(cfg));
-    expect(config.x402).toBeDefined();
-    expect(config.x402?.default_payer_secret_ref).toBeUndefined();
-  });
-
-  it("rejects invalid x402.max_payment_amount values", () => {
-    const cfg = `${BASE_CONFIG}
-[x402]
-max_payment_amount = "-1"
-`;
-    expect(() => loadConfig(writeConfig(cfg))).toThrow(/max_payment_amount must be a valid non-negative/i);
-
-    const nanCfg = `${BASE_CONFIG}
-[x402]
-max_payment_amount = "nope"
-`;
-    expect(() => loadConfig(writeConfig(nanCfg))).toThrow(
-      /max_payment_amount must be a valid non-negative/i,
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(
+      /Top-level \[x402\] is no longer supported/i,
     );
   });
 
-  it("accepts valid non-negative x402.max_payment_amount values", () => {
+  it("loads config without payments.x402 section", () => {
+    const config = loadConfig(writeConfig(BASE_CONFIG));
+    expect(config.payments?.x402).toBeUndefined();
+  });
+
+  it("rejects invalid payments.x402.max_payment_amount values", () => {
     const cfg = `${BASE_CONFIG}
-[x402]
+[payments.x402]
+max_payment_amount = "-1"
+`;
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(
+      /payments\.x402\.max_payment_amount must be a valid non-negative/i,
+    );
+
+    const nanCfg = `${BASE_CONFIG}
+[payments.x402]
+max_payment_amount = "nope"
+`;
+    expect(() => loadConfig(writeConfig(nanCfg))).toThrow(
+      /payments\.x402\.max_payment_amount must be a valid non-negative/i,
+    );
+  });
+
+  it("accepts valid non-negative payments.x402.max_payment_amount values", () => {
+    const cfg = `${BASE_CONFIG}
+[payments.x402]
 max_payment_amount = "0"
 `;
     const config = loadConfig(writeConfig(cfg));
-    expect(config.x402?.max_payment_amount).toBe("0");
+    expect(config.payments?.x402?.max_payment_amount).toBe("0");
   });
 
   it("throws when x402 section is not a table", () => {
@@ -385,7 +379,193 @@ network_passphrase = "Test SDF Network ; September 2015"
 
 [smart_accounts]
 `;
-    expect(() => loadConfig(writeConfig(cfg))).toThrow(/must be a table\/object/i);
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(
+      /Top-level \[x402\] is no longer supported/i,
+    );
+  });
+
+  it("loads payments config section when present", () => {
+    const cfg = `${BASE_CONFIG}
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp]
+default_intent = "channel"
+default_payer_secret_ref = "keychain://walleterm-testnet/mpp_seed"
+max_payment_amount = "1000"
+
+[payments.mpp.channel]
+source_account = "GCHANNELSOURCE"
+
+[payments.x402]
+default_payer_secret_ref = "op://Private/testnet/payer_seed"
+max_payment_amount = "0.5"
+default_scheme = "auto"
+
+[payments.x402.channel]
+state_file = ".x402-channels.json"
+default_deposit = "1000000"
+max_deposit_amount = "5000000"
+commitment_secret_ref = "keychain://walleterm-testnet/channel_seed"
+`;
+    const config = loadConfig(writeConfig(cfg));
+    expect(config.payments?.default_protocol).toBe("mpp");
+    expect(config.payments?.mpp?.default_intent).toBe("channel");
+    expect(config.payments?.mpp?.default_payer_secret_ref).toBe(
+      "keychain://walleterm-testnet/mpp_seed",
+    );
+    expect(config.payments?.mpp?.channel?.source_account).toBe("GCHANNELSOURCE");
+    expect(config.payments?.x402?.default_payer_secret_ref).toBe("op://Private/testnet/payer_seed");
+    expect(config.payments?.x402?.default_scheme).toBe("auto");
+    expect(config.payments?.x402?.channel).toMatchObject({
+      state_file: ".x402-channels.json",
+      default_deposit: "1000000",
+      max_deposit_amount: "5000000",
+      commitment_secret_ref: "keychain://walleterm-testnet/channel_seed",
+    });
+  });
+
+  it("loads extended payments.mpp.channel config fields", () => {
+    const cfg = `${BASE_CONFIG}
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp]
+default_intent = "channel"
+
+[payments.mpp.channel]
+default_channel_contract_id = "CCHANNEL"
+default_deposit = "10000000"
+factory_contract_id = "CFACTORY"
+token_contract_id = "CTOKEN"
+recipient = "GRECIPIENT"
+recipient_secret_ref = "keychain://walleterm-testnet/recipient_seed"
+refund_waiting_period = 24
+state_file = ".channels.json"
+source_account = "GSOURCE"
+`;
+    const config = loadConfig(writeConfig(cfg));
+    expect(config.payments?.mpp?.channel?.default_channel_contract_id).toBe("CCHANNEL");
+    expect(config.payments?.mpp?.channel?.default_deposit).toBe("10000000");
+    expect(config.payments?.mpp?.channel?.factory_contract_id).toBe("CFACTORY");
+    expect(config.payments?.mpp?.channel?.token_contract_id).toBe("CTOKEN");
+    expect(config.payments?.mpp?.channel?.recipient).toBe("GRECIPIENT");
+    expect(config.payments?.mpp?.channel?.recipient_secret_ref).toBe(
+      "keychain://walleterm-testnet/recipient_seed",
+    );
+    expect(config.payments?.mpp?.channel?.refund_waiting_period).toBe(24);
+    expect(config.payments?.mpp?.channel?.state_file).toBe(".channels.json");
+  });
+
+  it("rejects invalid payments defaults", () => {
+    const badProtocol = `${BASE_CONFIG}
+[payments]
+default_protocol = "nope"
+`;
+    expect(() => loadConfig(writeConfig(badProtocol))).toThrow(/payments\.default_protocol/i);
+
+    const badIntent = `${BASE_CONFIG}
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp]
+default_intent = "nope"
+`;
+    expect(() => loadConfig(writeConfig(badIntent))).toThrow(/payments\.mpp\.default_intent/i);
+  });
+
+  it("rejects invalid payments max payment amount values", () => {
+    const badMpp = `${BASE_CONFIG}
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp]
+max_payment_amount = "-1"
+`;
+    expect(() => loadConfig(writeConfig(badMpp))).toThrow(/payments\.mpp\.max_payment_amount/i);
+
+    const badX402 = `${BASE_CONFIG}
+[payments]
+default_protocol = "x402"
+
+[payments.x402]
+max_payment_amount = "-1"
+`;
+    expect(() => loadConfig(writeConfig(badX402))).toThrow(/payments\.x402\.max_payment_amount/i);
+  });
+
+  it("rejects invalid x402 default schemes", () => {
+    const badTopLevel = `${BASE_CONFIG}
+[x402]
+default_scheme = "nope"
+`;
+    expect(() => loadConfig(writeConfig(badTopLevel))).toThrow(
+      /Top-level \[x402\] is no longer supported/i,
+    );
+
+    const badPayments = `${BASE_CONFIG}
+[payments.x402]
+default_scheme = "nope"
+`;
+    expect(() => loadConfig(writeConfig(badPayments))).toThrow(/payments\.x402\.default_scheme/i);
+  });
+
+  it("rejects invalid payments.x402.channel values", () => {
+    const badDeposit = `${BASE_CONFIG}
+[payments.x402.channel]
+default_deposit = "-1"
+`;
+    expect(() => loadConfig(writeConfig(badDeposit))).toThrow(
+      /payments\.x402\.channel\.default_deposit/i,
+    );
+
+    const badMaxDeposit = `${BASE_CONFIG}
+[payments.x402.channel]
+max_deposit_amount = "-1"
+`;
+    expect(() => loadConfig(writeConfig(badMaxDeposit))).toThrow(
+      /payments\.x402\.channel\.max_deposit_amount/i,
+    );
+
+    const decimalDeposit = `${BASE_CONFIG}
+[payments.x402.channel]
+default_deposit = "1.5"
+`;
+    expect(() => loadConfig(writeConfig(decimalDeposit))).toThrow(
+      /payments\.x402\.channel\.default_deposit/i,
+    );
+
+    const scientificMaxDeposit = `${BASE_CONFIG}
+[payments.x402.channel]
+max_deposit_amount = "1e6"
+`;
+    expect(() => loadConfig(writeConfig(scientificMaxDeposit))).toThrow(
+      /payments\.x402\.channel\.max_deposit_amount/i,
+    );
+  });
+
+  it("rejects invalid payments.mpp.channel values", () => {
+    const badDeposit = `${BASE_CONFIG}
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp.channel]
+default_deposit = "-1"
+`;
+    expect(() => loadConfig(writeConfig(badDeposit))).toThrow(
+      /payments\.mpp\.channel\.default_deposit/i,
+    );
+
+    const badRefund = `${BASE_CONFIG}
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp.channel]
+refund_waiting_period = -1
+`;
+    expect(() => loadConfig(writeConfig(badRefund))).toThrow(
+      /payments\.mpp\.channel\.refund_waiting_period/i,
+    );
   });
 
   it("coerces unexpected types in config fields via String() without crashing", () => {

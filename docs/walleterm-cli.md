@@ -120,7 +120,7 @@ Notes:
 - Channels mode accepts signed transaction envelope XDR or signed `{func, auth[]}` bundle JSON.
 - Submitting a standalone auth entry is not supported.
 
-### x402 payment flow
+### Payment flow
 
 Call an x402-protected endpoint and pay from a Stellar keypair:
 
@@ -133,28 +133,131 @@ bun src/cli.ts pay \
   --format json
 ```
 
+Call an MPP-protected endpoint:
+
+```bash
+bun src/cli.ts pay \
+  https://api.example.com/resource \
+  --config ./walleterm.toml \
+  --network testnet \
+  --protocol mpp \
+  --intent charge \
+  --secret-ref keychain://walleterm-testnet/payer_seed \
+  --format json
+```
+
 Use config-driven payer selection instead of `--secret-ref`:
 
 ```toml
-[x402]
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp]
+default_payer_secret_ref = "keychain://walleterm-testnet/payer_seed"
+max_payment_amount = "100000"
+
+[payments.mpp.channel]
+recipient_secret_ref = "keychain://walleterm-testnet/recipient_seed"
+
+[payments.x402]
 default_payer_secret_ref = "keychain://walleterm-testnet/payer_seed"
 max_payment_amount = "0.50"
+default_scheme = "exact"
+
+[payments.x402.channel]
+state_file = ".walleterm-x402-channels.json"
+default_deposit = "1000000"
+max_deposit_amount = "5000000"
+commitment_secret_ref = "keychain://walleterm-testnet/channel_commitment_seed"
+```
+
+Call an x402 channel-enabled endpoint:
+
+```bash
+bun src/cli.ts pay \
+  https://api.example.com/resource \
+  --config ./walleterm.toml \
+  --network testnet \
+  --secret-ref keychain://walleterm-testnet/payer_seed \
+  --x402-scheme auto \
+  --x402-channel-deposit 1000000 \
+  --format json
 ```
 
 Request options:
 - `--method <method>`: HTTP method (default `GET`)
 - `--header "Name: Value"`: repeatable header option
 - `--data <body>`: request body
+- `--protocol x402|mpp`: choose the payment protocol
+- `--x402-scheme exact|channel|auto`: x402 scheme selector
+- `--intent charge|channel`: choose the MPP intent when `--protocol mpp`
+- `--source-account <G...>`: optional MPP channel simulation source account
+- `--x402-channel-deposit <amount>`: x402 channel deposit override
+- `--x402-channel-state-file <path>`: x402 channel state file override
+- `--x402-channel-commitment-secret-ref <ref>`: alternate seed for x402 channel commitment signatures
 - `--format body|json`: raw response body to stdout or JSON metadata output
 - `--out <path>`: write the raw response body to a file and print a JSON summary
 - `--dry-run`: inspect the 402 challenge without paying
-- `--yes`: bypass `x402.max_payment_amount`
+- `--yes`: bypass the configured max payment cap for the selected protocol
 
 Behavior notes:
-- If `x402.max_payment_amount` is set, `pay` aborts when the requested amount exceeds that cap unless `--yes` is passed.
-- `--format json` includes `payment_required`, `payment_payload`, `settlement`, and `settlement_error` fields.
+- All payment defaults live under `[payments.*]`.
+- `pay` supports x402 `exact`, x402 `channel`, MPP `charge`, and MPP `channel`.
+- If a selected protocol max-payment cap is set, `pay` aborts when the requested amount exceeds that cap unless `--yes` is passed.
+- `--format json` always includes `protocol`, `scheme`, `challenge`, `payment_attempt`, `settlement`, `protocol_error`, and `settlement_error`.
+- For backward compatibility, x402 JSON output still includes `payment_required` and `payment_payload`.
+- x402 channel results also include a `channel` object with local state metadata.
 - `--out` takes precedence over `--format json`; it writes the raw body to disk and prints a smaller JSON summary.
-- x402 payment network mapping currently supports the standard Stellar testnet and mainnet passphrases only.
+- x402 and MPP network mapping currently support the standard Stellar testnet and mainnet passphrases only.
+- x402 channel support uses the real Stellar state-channel contract flow when advertised and keeps a compatibility path for the legacy demo header shape.
+
+### MPP channel lifecycle
+
+Open a channel using config defaults:
+
+```bash
+bun src/cli.ts channel open --config ./walleterm.toml
+```
+
+Top up the active channel:
+
+```bash
+bun src/cli.ts channel topup --config ./walleterm.toml --amount 5000000
+```
+
+Inspect the active channel:
+
+```bash
+bun src/cli.ts channel status --config ./walleterm.toml
+```
+
+Recipient-side settlement without closing:
+
+```bash
+bun src/cli.ts channel settle --config ./walleterm.toml
+```
+
+Recipient-side final close using the latest remembered voucher:
+
+```bash
+bun src/cli.ts channel close --config ./walleterm.toml
+```
+
+Funder-side refund lifecycle:
+
+```bash
+bun src/cli.ts channel close-start --config ./walleterm.toml
+bun src/cli.ts channel refund --config ./walleterm.toml
+```
+
+Behavior notes:
+- `channel open` uses the selected payer keypair as both the funder account key and the commitment-signing key.
+- `channel open` requires `factory_contract_id`, `token_contract_id`, `recipient`, `default_deposit`, and `refund_waiting_period` from flags or `payments.mpp.channel`.
+- `channel status` uses the stored source account or `payments.mpp.channel.source_account` for Soroban simulations.
+- `pay --protocol mpp --intent channel` remembers the last voucher signature and cumulative amount in the local MPP channel state file.
+- `channel settle` and `channel close` can use explicitly passed `--amount` and `--signature`, but default to the latest remembered voucher for the active channel.
+- `channel settle` and `channel close` use `payments.mpp.channel.recipient_secret_ref` unless `--secret-ref` is passed.
+- `channel topup`, `channel close-start`, and `channel refund` use the stored funder signer or `payments.mpp.default_payer_secret_ref`.
 
 ### 1Password bootstrap wizard
 

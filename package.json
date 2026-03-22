@@ -27,7 +27,7 @@
     "test:live:ssh-agent": "WALLETERM_LIVE=1 WALLETERM_LIVE_SSH_AGENT=1 bun x vitest run --coverage=false tests/live/ssh-agent-live.test.ts",
     "test:live:ssh-agent:1p": "WALLETERM_LIVE=1 WALLETERM_LIVE_SSH_AGENT=1 WALLETERM_LIVE_SSH_AGENT_1P=1 bun x vitest run --coverage=false tests/live/ssh-agent-live.test.ts",
     "test:live:ssh-agent:system": "WALLETERM_LIVE=1 WALLETERM_LIVE_SSH_AGENT=1 WALLETERM_LIVE_SSH_AGENT_SYSTEM=1 bun x vitest run --coverage=false tests/live/ssh-agent-live.test.ts",
-    "test:live:all": "WALLETERM_LIVE=1 WALLETERM_LIVE_OP=1 WALLETERM_LIVE_KEYCHAIN=1 WALLETERM_LIVE_SSH_AGENT=1 WALLETERM_LIVE_SSH_AGENT_1P=1 WALLETERM_LIVE_SSH_AGENT_SYSTEM=1 bun x vitest run --coverage=false",
+    "test:live:all": "WALLETERM_LIVE=1 WALLETERM_LIVE_OP=1 WALLETERM_LIVE_KEYCHAIN=1 WALLETERM_LIVE_SSH_AGENT=1 WALLETERM_LIVE_SSH_AGENT_1P=1 WALLETERM_LIVE_SSH_AGENT_SYSTEM=1 WALLETERM_LIVE_MPP=1 WALLETERM_LIVE_X402=1 bun x vitest run --coverage=false",
     "install:ci": "bun install --frozen-lockfile"
   },
   "dependencies": {
@@ -37,6 +37,8 @@
     "@x402/core": "2.7.0",
     "@x402/stellar": "2.7.0",
     "commander": "^14.0.3",
+    "mppx": "^0.4.8",
+    "stellar-mpp-sdk": "github:stellar-experimental/stellar-mpp-sdk",
     "zod": "^3.25.76"
   },
   "devDependencies": {

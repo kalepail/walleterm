@@ -73,17 +73,41 @@ channels_api_key_ref = "op://Private/walleterm-mainnet/channels_api_key"
 # deployer_secret_ref = "op://Private/walleterm-mainnet/deployer_seed"
 
 # -------------------------------------------------------------
-# x402 payment protocol (optional)
+# Payment protocols (optional)
 # -------------------------------------------------------------
 
-# [x402]
-# Optional: default payer keypair secret ref for `walleterm pay` commands.
+# Preferred protocol-aware config:
+#
+# [payments]
+# default_protocol = "x402" # or "mpp"
+#
+# [payments.x402]
 # default_payer_secret_ref = "op://Private/walleterm-testnet/payer_seed"
-# default_payer_secret_ref = "keychain://walleterm-testnet/payer_seed"
-# Optional: abort `walleterm pay` if the requested amount exceeds this cap,
-# unless `--yes` is passed.
 # max_payment_amount = "0.50"
-
+# default_scheme = "exact" # exact | channel | auto
+#
+# [payments.x402.channel]
+# state_file = ".walleterm-x402-channels.json"
+# default_deposit = "1000000"
+# max_deposit_amount = "5000000"
+# commitment_secret_ref = "keychain://walleterm-testnet/channel_commitment_seed"
+#
+# [payments.mpp]
+# default_intent = "charge" # or "channel"
+# default_payer_secret_ref = "keychain://walleterm-testnet/payer_seed"
+# max_payment_amount = "100000"
+#
+# [payments.mpp.channel]
+# default_channel_contract_id = "C..."
+# default_deposit = "10000000"
+# factory_contract_id = "C..."
+# token_contract_id = "C..."
+# recipient = "G..."
+# recipient_secret_ref = "keychain://walleterm-testnet/recipient_seed"
+# refund_waiting_period = 24
+# source_account = "G..."
+# state_file = ".walleterm-mpp-channels.json"
+#
 # -------------------------------------------------------------
 # Smart account aliases
 # -------------------------------------------------------------

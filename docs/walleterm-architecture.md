@@ -7,7 +7,7 @@ Build a CLI signer for OpenZeppelin Stellar multisig smart accounts (Ed25519 ext
 - signs any signable payloads using keys resolved from a supported secret store,
 - outputs signed XDR,
 - optionally submits via OpenZeppelin Channels relayer or Stellar RPC,
-- optionally pays x402-protected HTTP endpoints with a Stellar keypair.
+- optionally pays x402- or MPP-protected HTTP endpoints with a Stellar keypair.
 
 ## Scope (v0)
 - Supported account model: OpenZeppelin smart account with:
@@ -25,7 +25,7 @@ Build a CLI signer for OpenZeppelin Stellar multisig smart accounts (Ed25519 ext
   - optional self-hosted `relayer-plugin-channels` endpoint,
   - direct Stellar RPC submission for signed transaction envelopes.
 - Supported payment backend:
-  - x402-protected HTTP endpoints using a Stellar payer keypair.
+  - x402- or MPP-protected HTTP endpoints using a Stellar payer keypair.
 
 ## Non-Goals
 - WebAuthn signing.
@@ -54,7 +54,9 @@ Contract verification:
 - `walleterm submit --network <name> --in <signed_xdr_or_bundle> [--mode channels|rpc]`
   - Optional submit path. RPC mode supports signed tx envelopes only.
 - `walleterm pay <url>`
-  - Makes an HTTP request to an x402-protected endpoint using a configured Stellar payer.
+  - Makes an HTTP request to an x402- or MPP-protected endpoint using a configured Stellar payer.
+- `walleterm channel open|topup|status|settle|close|close-start|refund`
+  - Manages local MPP one-way payment channels and the remembered voucher state used by channel payments, including funder-side and recipient-side lifecycle operations.
 - `walleterm wallet lookup --secret-ref <ref>` or `--account <alias>` or `--address <G...|C...>` or `--contract-id <C...>`
   - Wallet discovery and introspection flow.
 - `walleterm wallet signer generate`
@@ -183,12 +185,16 @@ Submission methods:
 - Direct Stellar RPC submission is supported for signed transaction envelopes only.
 - Signed `{func, auth[]}` bundles and standalone auth entries cannot be submitted through RPC mode.
 
-## x402 Payment Flow
-- `walleterm pay <url>` makes an HTTP request and retries after signing an x402 payment payload when the server responds with HTTP 402.
-- Payer selection comes from `--secret-ref` or `[x402].default_payer_secret_ref`.
-- `x402.max_payment_amount` sets a payment cap unless `--yes` is passed.
+## Payment Flow
+- `walleterm pay <url>` makes an HTTP request and retries after signing either an x402 or MPP payment payload when the server responds with HTTP 402.
+- The CLI now delegates pay-path orchestration to `src/payments/*`, with shared protocol selection and result normalization in `src/payments/index.ts` and protocol-specific adapters in `src/payments/x402.ts` and `src/payments/mpp.ts`.
+- Protocol selection comes from `--protocol` or `[payments].default_protocol`, with x402 as the compatibility default.
+- Payer selection is protocol-specific: x402 resolves from `--secret-ref` or `[payments.x402]`; MPP resolves from `--secret-ref` or `[payments.mpp]`.
+- Protocol-specific `max_payment_amount` settings set a payment cap unless `--yes` is passed.
 - `--dry-run` returns the 402 challenge details without paying.
-- Current x402 network support is mapped from the standard Stellar testnet and mainnet passphrases only.
+- The canonical payment modes are x402 `exact`, x402 `channel`, MPP `charge`, and MPP `channel`.
+- MPP channel payments persist the latest voucher amount/signature locally so the CLI can top up, inspect, and close the active channel later.
+- Current x402 and MPP network support is mapped from the standard Stellar testnet and mainnet passphrases only.
 
 ## Config Model (TOML)
 Top-level sections:
@@ -196,6 +202,16 @@ Top-level sections:
   - `default_network`, `strict_onchain`, `onchain_signer_mode`, `default_ttl_seconds`, `assumed_ledger_time_seconds`, `default_submit_mode`
 - `[networks.<name>]`
   - `rpc_url`, `network_passphrase`, `indexer_url`, `channels_base_url`, `channels_api_key_ref`, `deployer_secret_ref`, `x402_facilitator_url`
+- `[payments]`
+  - `default_protocol`
+- `[payments.mpp]`
+  - `default_intent`, `default_payer_secret_ref`, `max_payment_amount`
+- `[payments.mpp.channel]`
+  - `default_channel_contract_id`, `default_deposit`, `factory_contract_id`, `token_contract_id`, `recipient`, `recipient_secret_ref`, `refund_waiting_period`, `source_account`, `state_file`
+- `[payments.x402]`
+  - `default_payer_secret_ref`, `max_payment_amount`, `default_scheme`
+- `[payments.x402.channel]`
+  - `state_file`, `default_deposit`, `max_deposit_amount`, `commitment_secret_ref`
 - `[smart_accounts.<alias>]`
   - `network`, `contract_id`, `expected_wasm_hash`
 - `[[smart_accounts.<alias>.delegated_signers]]`
@@ -209,9 +225,6 @@ Top-level sections:
   - `public_key_hex` (32-byte Ed25519 pubkey)
   - `secret_ref` (provider-backed secret reference)
   - `enabled`
-- `[x402]`
-  - `default_payer_secret_ref`, `max_payment_amount`
-
 Validation rules:
 - All signer public keys unique within an account.
 - Secret-derived pubkey must equal configured `public_key_hex`.
@@ -234,7 +247,7 @@ Classes:
 - Signability errors: no matching key, network mismatch, unsupported signer-map shape.
 - Policy errors: signer configured but not resolvable from local configuration.
 - Submit errors: relayer transport/execution errors, timeout, on-chain failure.
-- Payment errors: unsupported passphrase-to-x402 mapping, max-payment cap exceeded, malformed x402 challenge.
+- Payment errors: unsupported passphrase-to-protocol mapping, max-payment cap exceeded, malformed x402 or MPP challenge, conflicting Authorization headers for MPP.
 
 ## Notes
 - The Smart Account Kit deployer is intentionally deterministic and public. It should never hold meaningful balances.

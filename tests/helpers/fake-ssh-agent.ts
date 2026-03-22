@@ -51,15 +51,9 @@ function buildIdentitiesResponse(keypairs: Keypair[]): Buffer {
 
 function buildSignResponse(keypair: Keypair, data: Buffer): Buffer {
   const signature = keypair.sign(data);
-  const sigBlob = Buffer.concat([
-    writeString("ssh-ed25519"),
-    writeString(Buffer.from(signature)),
-  ]);
+  const sigBlob = Buffer.concat([writeString("ssh-ed25519"), writeString(Buffer.from(signature))]);
 
-  const body = Buffer.concat([
-    Buffer.from([SSH2_AGENT_SIGN_RESPONSE]),
-    writeString(sigBlob),
-  ]);
+  const body = Buffer.concat([Buffer.from([SSH2_AGENT_SIGN_RESPONSE]), writeString(sigBlob)]);
 
   return Buffer.concat([writeUint32(body.length), body]);
 }
@@ -78,9 +72,7 @@ export interface FakeSshAgentFixture {
   cleanup: () => Promise<void>;
 }
 
-export async function makeFakeSshAgentFixture(
-  keypair?: Keypair,
-): Promise<FakeSshAgentFixture> {
+export async function makeFakeSshAgentFixture(keypair?: Keypair): Promise<FakeSshAgentFixture> {
   const kp = keypair ?? Keypair.random();
   const rootDir = makeTempDir("walleterm-fake-ssh-agent-");
   const socketPath = join(rootDir, "agent.sock");

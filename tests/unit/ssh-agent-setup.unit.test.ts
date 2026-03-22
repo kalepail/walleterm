@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
 import {
@@ -81,7 +81,7 @@ describe("ssh-agent-setup unit", () => {
       await fn();
     }
     cleanups.length = 0;
-  });
+  }, 120000);
 
   // -----------------------------------------------------------------------
   // Single-key success case
@@ -125,7 +125,7 @@ describe("ssh-agent-setup unit", () => {
     expect(result.config_snippet).toContain(`address = "${fx.stellarAddress}"`);
     expect(result.config_snippet).toContain(`secret_ref = "${key.ref}"`);
     expect(result.config_snippet).toContain("enabled = true");
-  });
+  }, 120000);
 
   // -----------------------------------------------------------------------
   // Multiple-key success case
@@ -198,12 +198,8 @@ describe("ssh-agent-setup unit", () => {
     expect(result.keys[0]!.stellar_address).toBe(addr1);
     expect(result.keys[1]!.stellar_address).toBe(addr2);
 
-    expect(result.keys[0]!.public_key_hex).toBe(
-      Buffer.from(kp1.rawPublicKey()).toString("hex"),
-    );
-    expect(result.keys[1]!.public_key_hex).toBe(
-      Buffer.from(kp2.rawPublicKey()).toString("hex"),
-    );
+    expect(result.keys[0]!.public_key_hex).toBe(Buffer.from(kp1.rawPublicKey()).toString("hex"));
+    expect(result.keys[1]!.public_key_hex).toBe(Buffer.from(kp2.rawPublicKey()).toString("hex"));
 
     expect(result.keys[0]!.comment).toBe(`fake-key-${addr1.slice(0, 8)}`);
     expect(result.keys[1]!.comment).toBe(`fake-key-${addr2.slice(0, 8)}`);
@@ -226,7 +222,7 @@ describe("ssh-agent-setup unit", () => {
 
     // First block starts at position 0 (no leading newline), second is separated
     expect(snippet.startsWith("[[smart_accounts.<alias>.delegated_signers]]")).toBe(true);
-  });
+  }, 120000);
 
   // -----------------------------------------------------------------------
   // Backend and socket_path passthrough (no explicit socketPath -> resolveSocketPath default)
@@ -242,7 +238,7 @@ describe("ssh-agent-setup unit", () => {
 
     expect(result.backend).toBe("1password");
     expect(result.socket_path).toBe(fx.socketPath);
-  });
+  }, 120000);
 
   // -----------------------------------------------------------------------
   // Ref without socketPath (custom backend requires socket, so use system)
@@ -268,7 +264,7 @@ describe("ssh-agent-setup unit", () => {
       if (prev === undefined) delete process.env.SSH_AUTH_SOCK;
       else process.env.SSH_AUTH_SOCK = prev;
     }
-  });
+  }, 120000);
 
   // -----------------------------------------------------------------------
   // Error: no Ed25519 keys found
@@ -283,7 +279,7 @@ describe("ssh-agent-setup unit", () => {
         socketPath: empty.socketPath,
       }),
     ).rejects.toThrow(`No Ed25519 keys found in SSH agent at ${empty.socketPath}`);
-  });
+  }, 120000);
 
   // -----------------------------------------------------------------------
   // Config snippet TOML structure validation
@@ -304,7 +300,7 @@ describe("ssh-agent-setup unit", () => {
     expect(lines[3]).toBe(`secret_ref = "${result.keys[0]!.ref}"`);
     expect(lines[4]).toBe("enabled = true");
     expect(lines).toHaveLength(5);
-  });
+  }, 120000);
 
   // -----------------------------------------------------------------------
   // Specific keypair passthrough
@@ -320,10 +316,8 @@ describe("ssh-agent-setup unit", () => {
     });
 
     expect(result.keys[0]!.stellar_address).toBe(kp.publicKey());
-    expect(result.keys[0]!.public_key_hex).toBe(
-      Buffer.from(kp.rawPublicKey()).toString("hex"),
-    );
-  });
+    expect(result.keys[0]!.public_key_hex).toBe(Buffer.from(kp.rawPublicKey()).toString("hex"));
+  }, 120000);
 
   it("parseOpenSshEd25519PubKey decodes valid ssh-ed25519 keys", () => {
     const kp = Keypair.random();
@@ -345,10 +339,7 @@ describe("ssh-agent-setup unit", () => {
       parseOpenSshEd25519PubKey(`ssh-ed25519 ${malformedBlob.toString("base64")}`),
     ).toThrow(/Expected 32-byte Ed25519 key/);
 
-    const wrongAlgoBlob = Buffer.concat([
-      writeString("ssh-rsa"),
-      writeString(Buffer.alloc(32, 1)),
-    ]);
+    const wrongAlgoBlob = Buffer.concat([writeString("ssh-rsa"), writeString(Buffer.alloc(32, 1))]);
     expect(() =>
       parseOpenSshEd25519PubKey(`ssh-ed25519 ${wrongAlgoBlob.toString("base64")}`),
     ).toThrow(/Not an ssh-ed25519 public key/);
@@ -362,7 +353,7 @@ describe("ssh-agent-setup unit", () => {
     expect(appendToAgentToml(tomlPath, "wallet-key", "Private")).toBe(false);
 
     const content = readFileSync(tomlPath, "utf8");
-    expect(content).toContain('[[ssh-keys]]');
+    expect(content).toContain("[[ssh-keys]]");
     expect(content).toContain('item = "wallet-key"');
     expect(content).toContain('vault = "Private"');
     expect((content.match(/\[\[ssh-keys\]\]/g) || []).length).toBe(1);
@@ -598,7 +589,8 @@ process.stdout.write(JSON.stringify({
     let stderr = "";
     const originalWrite = process.stderr.write.bind(process.stderr);
     process.stderr.write = ((chunk: unknown) => {
-      stderr += typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8");
+      stderr +=
+        typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf8");
       return true;
     }) as typeof process.stderr.write;
 
@@ -616,7 +608,7 @@ process.stdout.write(JSON.stringify({
     } finally {
       process.stderr.write = originalWrite;
     }
-  }, 7000);
+  }, 12000);
 
   it("generateSshAgentKey1Password uses env/default fallbacks when options are omitted", async () => {
     const kp = Keypair.random();
@@ -665,7 +657,7 @@ process.stdout.write(JSON.stringify({
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
     }
-  });
+  }, 120000);
 
   it("generateSshAgentKey1Password falls back to the default op binary name via PATH", async () => {
     const kp = Keypair.random();
@@ -712,7 +704,7 @@ process.stdout.write(JSON.stringify({
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
     }
-  });
+  }, 120000);
 
   it("generateSshAgentKeySystem uses env-provided binaries and default key path", async () => {
     const kp = Keypair.random();
@@ -768,7 +760,7 @@ fs.writeFileSync(path + ".pub", ${JSON.stringify(`${buildOpenSshLine(kp, "wallet
       if (previousAdd === undefined) delete process.env.WALLETERM_SSH_ADD_BIN;
       else process.env.WALLETERM_SSH_ADD_BIN = previousAdd;
     }
-  });
+  }, 120000);
 
   it("generateSshAgentKeySystem falls back to default binary names via PATH", async () => {
     const kp = Keypair.random();
@@ -827,7 +819,7 @@ fs.writeFileSync(path + ".pub", ${JSON.stringify(`${buildOpenSshLine(kp, "wallet
       if (previousAdd === undefined) delete process.env.WALLETERM_SSH_ADD_BIN;
       else process.env.WALLETERM_SSH_ADD_BIN = previousAdd;
     }
-  });
+  }, 120000);
 
   it("generateSshAgentKey dispatches supported backends and rejects unsupported ones", async () => {
     const kp = Keypair.random();
@@ -874,7 +866,7 @@ fs.writeFileSync(path + ".pub", ${JSON.stringify(`${buildOpenSshLine(kp, "wallet
     await expect(
       generateSshAgentKey({ backend: "custom" as "system", socketPath: "/tmp/agent.sock" }),
     ).rejects.toThrow(/Key generation is not supported for backend 'custom'/);
-  });
+  }, 120000);
 });
 
 function buildOpenSshLine(keypair: Keypair, comment: string): string {

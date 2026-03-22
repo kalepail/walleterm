@@ -294,9 +294,9 @@ process.exit(1);
   it("resolveChannelsApiKey surfaces generator failure and missing apiKey", async () => {
     const { securityBin } = makeSecurityBin();
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      new Response("{}", { status: 503 }),
-    );
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("{}", { status: 503 }));
     await expect(
       setupMacOSKeychainForWallet({
         securityBin,

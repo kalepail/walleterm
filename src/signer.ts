@@ -1,10 +1,5 @@
 import { type Keypair, xdr } from "@stellar/stellar-sdk";
-import {
-  agentSign,
-  findAgentIdentity,
-  parseSshAgentRef,
-  resolveSocketPath,
-} from "./ssh-agent.js";
+import { agentSign, findAgentIdentity, parseSshAgentRef, resolveSocketPath } from "./ssh-agent.js";
 
 export interface Signer {
   publicKey(): string;
@@ -59,12 +54,7 @@ export class SshAgentSigner implements Signer {
   private readonly keyBlob: Buffer;
   private readonly socketPath: string;
 
-  constructor(
-    stellarPublicKey: string,
-    rawPubKey: Buffer,
-    keyBlob: Buffer,
-    socketPath: string,
-  ) {
+  constructor(stellarPublicKey: string, rawPubKey: Buffer, keyBlob: Buffer, socketPath: string) {
     this.stellarPublicKey = stellarPublicKey;
     this.rawPubKey = rawPubKey;
     this.keyBlob = keyBlob;

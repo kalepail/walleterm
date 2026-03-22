@@ -260,8 +260,12 @@ process.exit(1);
   });
 
   it("parseKeychainSecretRef rejects wrong schemes and malformed paths", () => {
-    expect(() => parseKeychainSecretRef("op://vault/item/field")).toThrow(/Invalid keychain secret ref/i);
-    expect(() => parseKeychainSecretRef("keychain://service-only")).toThrow(/Expected keychain:\/\//i);
+    expect(() => parseKeychainSecretRef("op://vault/item/field")).toThrow(
+      /Invalid keychain secret ref/i,
+    );
+    expect(() => parseKeychainSecretRef("keychain://service-only")).toThrow(
+      /Expected keychain:\/\//i,
+    );
   });
 
   it("clearCache causes a second resolve to call the provider again", async () => {

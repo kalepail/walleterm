@@ -4,17 +4,21 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { StrKey } from "@stellar/stellar-sdk";
-import {
-  buildSshAgentRef,
-  listAgentIdentities,
-  resolveSocketPath,
-} from "./ssh-agent.js";
+import { buildSshAgentRef, listAgentIdentities, resolveSocketPath } from "./ssh-agent.js";
 
 const execFileAsync = promisify(execFile);
 
 function filteredEnv(): NodeJS.ProcessEnv {
   const allow = [
-    "PATH", "HOME", "USER", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "SSH_AUTH_SOCK",
+    "PATH",
+    "HOME",
+    "USER",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "SSH_AUTH_SOCK",
   ];
   const env: Record<string, string> = {};
   for (const key of allow) {
@@ -137,7 +141,8 @@ export function appendToAgentToml(tomlPath: string, title: string, vault: string
   }
 
   const block = `[[ssh-keys]]\nitem = "${title}"\nvault = "${vault}"\n`;
-  const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n\n" : existing.length > 0 ? "\n" : "";
+  const separator =
+    existing.length > 0 && !existing.endsWith("\n") ? "\n\n" : existing.length > 0 ? "\n" : "";
   const content = existing + separator + block;
 
   mkdirSync(dirname(tomlPath), { recursive: true });
@@ -169,12 +174,18 @@ export async function generateSshAgentKey1Password(
   const { stdout } = await execFileAsync(
     opBin,
     [
-      "item", "create",
-      "--category", "SSH Key",
-      "--ssh-generate-key", "ed25519",
-      "--title", title,
-      "--vault", vault,
-      "--format", "json",
+      "item",
+      "create",
+      "--category",
+      "SSH Key",
+      "--ssh-generate-key",
+      "ed25519",
+      "--title",
+      title,
+      "--vault",
+      vault,
+      "--format",
+      "json",
     ],
     { maxBuffer: 1024 * 1024, env: filteredEnv() },
   );
@@ -257,11 +268,10 @@ export async function generateSshAgentKeySystem(
   const sshKeygenBin = opts.sshKeygenBin ?? process.env.WALLETERM_SSH_KEYGEN_BIN ?? "ssh-keygen";
   const sshAddBin = opts.sshAddBin ?? process.env.WALLETERM_SSH_ADD_BIN ?? "ssh-add";
 
-  await execFileAsync(
-    sshKeygenBin,
-    ["-t", "ed25519", "-f", keyPath, "-N", "", "-C", "walleterm"],
-    { maxBuffer: 1024 * 1024, env: filteredEnv() },
-  );
+  await execFileAsync(sshKeygenBin, ["-t", "ed25519", "-f", keyPath, "-N", "", "-C", "walleterm"], {
+    maxBuffer: 1024 * 1024,
+    env: filteredEnv(),
+  });
 
   const pubKeyLine = readFileSync(pubKeyPath, "utf-8");
   const pubkey = parseOpenSshEd25519PubKey(pubKeyLine);

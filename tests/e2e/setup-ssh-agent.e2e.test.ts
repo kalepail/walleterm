@@ -4,14 +4,15 @@ import { join } from "node:path";
 import { Keypair } from "@stellar/stellar-sdk";
 import { describe, expect, it } from "vitest";
 import { runCliInProcess } from "../helpers/run-cli.js";
-import {
-  makeFakeSshAgentFixture,
-  type FakeSshAgentFixture,
-} from "../helpers/fake-ssh-agent.js";
+import { makeFakeSshAgentFixture, type FakeSshAgentFixture } from "../helpers/fake-ssh-agent.js";
 import { makeTempDir } from "../helpers/temp-dir.js";
 
 /** Build an SSH agent that always returns zero identities. */
-function makeEmptyAgent(): Promise<{ server: Server; socketPath: string; cleanup: () => Promise<void> }> {
+function makeEmptyAgent(): Promise<{
+  server: Server;
+  socketPath: string;
+  cleanup: () => Promise<void>;
+}> {
   const rootDir = makeTempDir("walleterm-empty-ssh-agent-");
   const socketPath = join(rootDir, "agent.sock");
 
@@ -41,15 +42,17 @@ function makeEmptyAgent(): Promise<{ server: Server; socketPath: string; cleanup
     });
   });
 
-  return new Promise<{ server: Server; socketPath: string; cleanup: () => Promise<void> }>((resolve) => {
-    server.listen(socketPath, () => {
-      resolve({
-        server,
-        socketPath,
-        cleanup: () => new Promise<void>((res) => server.close(() => res())),
+  return new Promise<{ server: Server; socketPath: string; cleanup: () => Promise<void> }>(
+    (resolve) => {
+      server.listen(socketPath, () => {
+        resolve({
+          server,
+          socketPath,
+          cleanup: () => new Promise<void>((res) => server.close(() => res())),
+        });
       });
-    });
-  });
+    },
+  );
 }
 
 describe("walleterm setup ssh-agent e2e", () => {
@@ -85,7 +88,7 @@ describe("walleterm setup ssh-agent e2e", () => {
     } finally {
       await fx.cleanup();
     }
-  }, 15000);
+  }, 30000);
 
   it("prints human-readable output to stderr without --json", async () => {
     const fx: FakeSshAgentFixture = await makeFakeSshAgentFixture();

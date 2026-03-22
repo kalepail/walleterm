@@ -10,7 +10,7 @@ It is not a long-running daemon/service. The default model is:
 1. review unsigned payload
 2. sign what you can with configured keys from a supported secret store
 3. optionally submit via relayer (Channels) or RPC
-4. optionally pay x402-protected HTTP endpoints with a configured Stellar payer
+4. optionally pay x402- or MPP-protected HTTP endpoints with a configured Stellar payer
 
 ## What It Does
 
@@ -20,7 +20,7 @@ It is not a long-running daemon/service. The default model is:
   - delegated signers (`G...`)
   - external Ed25519 signer map entries
 - Manages wallet/signer flows (lookup, deploy, add/remove signers)
-- Pays x402-protected endpoints from a Stellar keypair
+- Pays x402- or MPP-protected endpoints from a Stellar keypair
 - Resolves key material from pluggable secret providers
 
 ## Prereqs
@@ -69,7 +69,7 @@ The simplest mental model is:
 4. `review`
 5. `sign`
 6. `submit` if needed
-7. `pay` for x402 endpoints if needed
+7. `pay` for x402 or MPP endpoints if needed
 
 ## Core Usage
 
@@ -107,7 +107,35 @@ bun run cli pay https://api.example.com/resource \
   --format json
 ```
 
-`pay` can also read the payer from `x402.default_payer_secret_ref` in `walleterm.toml`. `--out` writes the raw response body to disk and prints a JSON summary.
+Pay an MPP-protected endpoint:
+
+```bash
+bun run cli pay https://api.example.com/resource \
+  --config ./walleterm.toml \
+  --network testnet \
+  --protocol mpp \
+  --intent charge \
+  --secret-ref keychain://walleterm-testnet/payer_seed \
+  --format json
+```
+
+Open an MPP channel from config defaults:
+
+```bash
+bun run cli channel open --config ./walleterm.toml
+```
+
+Inspect or manage the active channel:
+
+```bash
+bun run cli channel status --config ./walleterm.toml
+bun run cli channel settle --config ./walleterm.toml
+bun run cli channel close --config ./walleterm.toml
+bun run cli channel close-start --config ./walleterm.toml
+bun run cli channel refund --config ./walleterm.toml
+```
+
+`pay` reads protocol defaults from `[payments.*]` only. The supported payment modes are x402 `exact`, x402 `channel`, MPP `charge`, and MPP `channel`. MPP channel payments remember the latest voucher locally so the channel lifecycle commands can top up, inspect, settle, close, or refund the active channel depending on whether you are acting as funder or recipient.
 
 ## Wallet Management
 
@@ -171,6 +199,7 @@ bun run cli --help
 bun run cli wallet --help
 bun run cli wallet signer --help
 bun run cli pay --help
+bun run cli channel --help
 bun run cli setup op --help
 bun run cli setup keychain --help
 bun run cli setup ssh-agent --help

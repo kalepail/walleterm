@@ -31,8 +31,106 @@ vi.mock("../../src/x402.js", async () => {
   };
 });
 
+vi.mock("../../src/x402-channel.js", async () => {
+  return {
+    executeX402ChannelRequest: vi.fn(async () => ({
+      kind: "channel",
+      scheme: "channel",
+      paid: true,
+      status: 200,
+      body: new TextEncoder().encode("paid via channel"),
+      responseHeaders: {},
+      paymentRequired: {
+        x402Version: 2,
+        resource: { url: "https://example.com" },
+        accepts: [
+          {
+            scheme: "channel",
+            network: "stellar:testnet",
+            asset: "CTOKEN",
+            amount: "10",
+            payTo: "GRECIPIENT",
+            maxTimeoutSeconds: 60,
+            extra: {},
+          },
+        ],
+      },
+      paymentPayload: {
+        x402Version: 2,
+        resource: { url: "https://example.com" },
+        accepted: {
+          scheme: "channel",
+          network: "stellar:testnet",
+          asset: "CTOKEN",
+          amount: "10",
+          payTo: "GRECIPIENT",
+          maxTimeoutSeconds: 60,
+          extra: {},
+        },
+        payload: { action: "pay", channelId: "CCHANNEL" },
+      },
+      settlement: {
+        success: true,
+        channelId: "CCHANNEL",
+        currentCumulative: "10",
+        remainingBalance: "90",
+      },
+      channel: {
+        action: "open+pay",
+        mode: "demo",
+        channel_id: "CCHANNEL",
+        deposit: "100",
+        current_cumulative: "10",
+        remaining_balance: "90",
+        state_path: "/tmp/x402-channels.json",
+        opened: true,
+      },
+    })),
+  };
+});
+
+vi.mock("../../src/mpp.js", async () => {
+  return {
+    passphraseToMppNetwork: vi.fn(() => "testnet"),
+    createMppClientMethod: vi.fn(() => ({ name: "stellar", intent: "charge" })),
+    executeMppRequest: vi.fn(async () => ({
+      paid: true,
+      status: 200,
+      body: new TextEncoder().encode("paid via mpp"),
+      responseHeaders: {},
+      challenge: {
+        id: "challenge-1",
+        realm: "api.example.com",
+        method: "stellar",
+        intent: "charge",
+        request: { amount: "100", currency: "CUSDCTOKEN", recipient: "GRECIPIENT" },
+      },
+      paymentAttempt: {
+        challenge: {
+          id: "challenge-1",
+          realm: "api.example.com",
+          method: "stellar",
+          intent: "charge",
+          request: { amount: "100", currency: "CUSDCTOKEN", recipient: "GRECIPIENT" },
+        },
+        payload: { type: "transaction", xdr: "AAAA" },
+      },
+      settlement: {
+        method: "stellar",
+        reference: "txhash",
+        status: "success",
+        timestamp: "2026-03-20T00:00:00.000Z",
+      },
+    })),
+  };
+});
+
 const { executeX402Request } = await import("../../src/x402.js");
+const { executeX402ChannelRequest } = await import("../../src/x402-channel.js");
+const { executeMppRequest } = await import("../../src/mpp.js");
 const executeX402RequestMock = executeX402Request as ReturnType<typeof vi.fn>;
+const executeX402ChannelRequestMock = executeX402ChannelRequest as ReturnType<typeof vi.fn>;
+const executeMppRequestMock = executeMppRequest as ReturnType<typeof vi.fn>;
 const PAYMENT_PAYLOAD = { x402Version: 2, accepted: {}, payload: {} };
 
 type Fixture = {
@@ -73,6 +171,8 @@ ${extraToml}`;
 describe("walleterm pay e2e", () => {
   beforeEach(() => {
     executeX402RequestMock.mockClear();
+    executeX402ChannelRequestMock.mockClear();
+    executeMppRequestMock.mockClear();
   });
 
   it("errors when no payer is specified", async () => {
@@ -192,6 +292,7 @@ describe("walleterm pay e2e", () => {
       env,
     );
     const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.protocol).toBe("x402");
     expect(parsed.paid).toBe(true);
     expect(parsed.status).toBe(200);
     expect(parsed.payer).toBe(keypair.publicKey());
@@ -203,6 +304,12 @@ describe("walleterm pay e2e", () => {
       accepts: [],
     });
     expect(parsed.payment_payload).toEqual({ x402Version: 2, accepted: {}, payload: {} });
+    expect(parsed.challenge).toEqual({
+      x402Version: 2,
+      resource: { url: "https://example.com" },
+      accepts: [],
+    });
+    expect(parsed.payment_attempt).toEqual({ x402Version: 2, accepted: {}, payload: {} });
     expect(parsed.settlement).toEqual({
       success: true,
       transaction: "txhash",
@@ -288,7 +395,10 @@ default_network = "testnet"
 rpc_url = "https://example.test/rpc"
 network_passphrase = "Test SDF Network ; September 2015"
 
-[x402]
+[payments]
+default_protocol = "x402"
+
+[payments.x402]
 default_payer_secret_ref = "keychain://walleterm-test/default_payer"
 
 [smart_accounts]
@@ -302,6 +412,39 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     );
     const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(parsed.payer).toBe(keypair.publicKey());
+  });
+
+  it("does not fall back to MPP payer config for x402", async () => {
+    const keypair = Keypair.random();
+    const rootDir = makeTempDir("walleterm-pay-e2e-");
+    const fake = makeFakeSecurityFixture();
+    writeFileSync(
+      fake.storePath,
+      JSON.stringify({ "walleterm-test::default_payer": keypair.secret() }),
+      "utf8",
+    );
+
+    const config = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "https://example.test/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+
+[payments]
+default_protocol = "x402"
+
+[payments.mpp]
+default_payer_secret_ref = "keychain://walleterm-test/default_payer"
+
+[smart_accounts]
+`;
+    const configPath = join(rootDir, "walleterm.toml");
+    writeFileSync(configPath, config, "utf8");
+
+    await expect(
+      runCliInProcess(["pay", "https://example.com/resource", "--config", configPath], fake.env),
+    ).rejects.toThrow(/No payer specified/);
   });
 
   it("omits headers when none specified", async () => {
@@ -673,5 +816,284 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(parsed.settlement).toBeNull();
     expect(parsed.settlement_error).toBe("No PAYMENT-RESPONSE header");
+  });
+
+  it("supports MPP when explicitly selected", async () => {
+    const { configPath, env, keypair } = makeFixture();
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--protocol",
+        "mpp",
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--format",
+        "json",
+      ],
+      env,
+    );
+
+    expect(executeMppRequestMock).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.protocol).toBe("mpp");
+    expect(parsed.payer).toBe(keypair.publicKey());
+    expect(parsed.challenge).toEqual({
+      id: "challenge-1",
+      realm: "api.example.com",
+      method: "stellar",
+      intent: "charge",
+      request: { amount: "100", currency: "CUSDCTOKEN", recipient: "GRECIPIENT" },
+    });
+    expect(parsed.payment_attempt).toEqual({
+      challenge: {
+        id: "challenge-1",
+        realm: "api.example.com",
+        method: "stellar",
+        intent: "charge",
+        request: { amount: "100", currency: "CUSDCTOKEN", recipient: "GRECIPIENT" },
+      },
+      payload: { type: "transaction", xdr: "AAAA" },
+    });
+    expect(parsed.payment_required).toBeUndefined();
+    expect(parsed.payment_payload).toBeUndefined();
+  });
+
+  it("uses payments.mpp defaults for protocol and payer", async () => {
+    const keypair = Keypair.random();
+    const rootDir = makeTempDir("walleterm-pay-e2e-");
+    const fake = makeFakeSecurityFixture();
+    const storeKey = "walleterm-test::default_payer";
+    writeFileSync(fake.storePath, JSON.stringify({ [storeKey]: keypair.secret() }), "utf8");
+
+    const config = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "https://example.test/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp]
+default_payer_secret_ref = "keychain://walleterm-test/default_payer"
+
+[smart_accounts]
+`;
+    const configPath = join(rootDir, "walleterm.toml");
+    writeFileSync(configPath, config, "utf8");
+
+    const result = await runCliInProcess(
+      ["pay", "https://example.com/resource", "--config", configPath, "--format", "json"],
+      fake.env,
+    );
+
+    expect(executeMppRequestMock).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.protocol).toBe("mpp");
+    expect(parsed.payer).toBe(keypair.publicKey());
+  });
+
+  it("rejects removed legacy x402 config when loading MPP config", async () => {
+    const keypair = Keypair.random();
+    const rootDir = makeTempDir("walleterm-pay-e2e-");
+    const fake = makeFakeSecurityFixture();
+    writeFileSync(
+      fake.storePath,
+      JSON.stringify({ "walleterm-test::default_payer": keypair.secret() }),
+      "utf8",
+    );
+
+    const config = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "https://example.test/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+
+[payments]
+default_protocol = "mpp"
+
+[x402]
+default_payer_secret_ref = "keychain://walleterm-test/default_payer"
+
+[smart_accounts]
+`;
+    const configPath = join(rootDir, "walleterm.toml");
+    writeFileSync(configPath, config, "utf8");
+
+    await expect(
+      runCliInProcess(["pay", "https://example.com/resource", "--config", configPath], fake.env),
+    ).rejects.toThrow(/Top-level \[x402\] is no longer supported/);
+  });
+
+  it("remembers the latest MPP channel voucher locally after a paid request", async () => {
+    const keypair = Keypair.random();
+    const rootDir = makeTempDir("walleterm-pay-e2e-");
+    const fake = makeFakeSecurityFixture();
+    const storeKey = "walleterm-test::default_payer";
+    writeFileSync(fake.storePath, JSON.stringify({ [storeKey]: keypair.secret() }), "utf8");
+
+    executeMppRequestMock.mockResolvedValueOnce({
+      paid: true,
+      status: 200,
+      body: new TextEncoder().encode("paid via mpp"),
+      responseHeaders: {},
+      challenge: {
+        id: "challenge-1",
+        realm: "api.example.com",
+        method: "stellar",
+        intent: "channel",
+        request: { amount: "100", channel: "CCHANNEL123" },
+      },
+      paymentAttempt: {
+        challenge: {
+          id: "challenge-1",
+          realm: "api.example.com",
+          method: "stellar",
+          intent: "channel",
+          request: { amount: "100", channel: "CCHANNEL123" },
+        },
+        payload: { action: "voucher", amount: "200", signature: "a".repeat(128) },
+      },
+      settlement: {
+        method: "stellar",
+        reference: "txhash",
+        status: "success",
+        timestamp: "2026-03-20T00:00:00.000Z",
+      },
+    });
+
+    const config = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "https://example.test/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp]
+default_intent = "channel"
+default_payer_secret_ref = "keychain://walleterm-test/default_payer"
+
+[payments.mpp.channel]
+state_file = ".state.json"
+
+[smart_accounts]
+`;
+    const configPath = join(rootDir, "walleterm.toml");
+    writeFileSync(configPath, config, "utf8");
+
+    await runCliInProcess(
+      ["pay", "https://example.com/resource", "--config", configPath, "--format", "json"],
+      fake.env,
+    );
+
+    const state = JSON.parse(readFileSync(join(rootDir, ".state.json"), "utf8")) as {
+      active_channel_by_network: Record<string, string>;
+      channels: Record<string, Record<string, unknown>>;
+    };
+    expect(state.active_channel_by_network.testnet).toBe("CCHANNEL123");
+    expect(state.channels.CCHANNEL123?.last_voucher_amount).toBe("200");
+  });
+
+  it("uses experimental x402 channel flow when --x402-scheme channel is selected", async () => {
+    const { configPath, env, keypair } = makeFixture();
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--x402-scheme",
+        "channel",
+        "--x402-channel-deposit",
+        "100",
+        "--x402-channel-state-file",
+        ".x402-state.json",
+        "--x402-channel-commitment-secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--format",
+        "json",
+      ],
+      env,
+    );
+
+    expect(executeX402ChannelRequestMock).toHaveBeenCalledTimes(1);
+    expect(executeX402RequestMock).not.toHaveBeenCalled();
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.protocol).toBe("x402");
+    expect(parsed.scheme).toBe("channel");
+    expect(parsed.payer).toBe(keypair.publicKey());
+    expect(parsed.channel).toEqual(
+      expect.objectContaining({
+        channel_id: "CCHANNEL",
+        current_cumulative: "10",
+        remaining_balance: "90",
+      }),
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  it("auto-falls back to exact x402 when channel executor requests exact", async () => {
+    const { configPath, env } = makeFixture();
+    executeX402ChannelRequestMock.mockResolvedValueOnce({ kind: "fallback-exact" });
+
+    await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--x402-scheme",
+        "auto",
+      ],
+      env,
+    );
+
+    expect(executeX402ChannelRequestMock).toHaveBeenCalledTimes(1);
+    expect(executeX402RequestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes scheme and channel summary in --out output for x402 channel payments", async () => {
+    const { configPath, env } = makeFixture();
+    const outDir = makeTempDir("walleterm-pay-channel-out-");
+    const outPath = join(outDir, "response.bin");
+
+    const result = await runCliInProcess(
+      [
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--secret-ref",
+        "keychain://walleterm-test/payer_seed",
+        "--x402-scheme",
+        "channel",
+        "--out",
+        outPath,
+      ],
+      env,
+    );
+
+    expect(readFileSync(outPath, "utf8")).toBe("paid via channel");
+    const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(parsed.scheme).toBe("channel");
+    expect(parsed.channel).toEqual(
+      expect.objectContaining({
+        channel_id: "CCHANNEL",
+        state_path: "/tmp/x402-channels.json",
+      }),
+    );
+    expect(result.stderr).toBe("");
   });
 });

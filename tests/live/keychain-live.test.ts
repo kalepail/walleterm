@@ -3,177 +3,23 @@ import { randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Address, Asset, Keypair, Networks, xdr } from "@stellar/stellar-sdk";
+import { Asset, Keypair, Networks } from "@stellar/stellar-sdk";
 import { makeTempDir } from "../helpers/temp-dir.js";
+import {
+  buildNativeTransferBundle,
+  DEFAULT_WASM_HASH,
+  fundWithFriendbot,
+  getNativeBalanceStroops,
+  PROJECT_ROOT,
+  sleep,
+  waitForHorizonTransaction,
+  waitForWalletLookup,
+} from "./helpers.js";
 
 const maybeDescribe =
   process.env.WALLETERM_LIVE === "1" && process.env.WALLETERM_LIVE_KEYCHAIN === "1"
     ? describe
     : describe.skip;
-
-const PROJECT_ROOT = "/Users/kalepail/Desktop/walleterm";
-const DEFAULT_WASM_HASH = "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e";
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForHorizonTransaction(hash: string): Promise<void> {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const response = await fetch(`https://horizon-testnet.stellar.org/transactions/${hash}`);
-    if (response.ok) return;
-    if (response.status !== 404) {
-      throw new Error(`Horizon transaction lookup failed (${response.status})`);
-    }
-    await sleep(2_000);
-  }
-  throw new Error(`Timed out waiting for Horizon transaction ${hash}`);
-}
-
-async function waitForWalletLookup(
-  args: string[],
-  env: NodeJS.ProcessEnv | undefined,
-  predicate: (result: {
-    count?: number;
-    wallets?: Array<{ contract_id?: string; lookup_types?: string[]; onchain_signers?: unknown[] }>;
-  }) => boolean,
-): Promise<{
-  count?: number;
-  wallets?: Array<{ contract_id?: string; lookup_types?: string[]; onchain_signers?: unknown[] }>;
-}> {
-  let lastResult:
-    | {
-        count?: number;
-        wallets?: Array<{
-          contract_id?: string;
-          lookup_types?: string[];
-          onchain_signers?: unknown[];
-        }>;
-      }
-    | undefined;
-
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const lookup = await execa("bun", ["src/cli.ts", "wallet", "lookup", ...args], {
-      cwd: PROJECT_ROOT,
-      env,
-    });
-    const result = JSON.parse(lookup.stdout) as {
-      count?: number;
-      wallets?: Array<{
-        contract_id?: string;
-        lookup_types?: string[];
-        onchain_signers?: unknown[];
-      }>;
-    };
-    lastResult = result;
-    if (predicate(result)) return result;
-    await sleep(2_000);
-  }
-
-  throw new Error(`Timed out waiting for wallet lookup to match: ${JSON.stringify(lastResult)}`);
-}
-
-function xlmStringToStroops(amount: string): bigint {
-  const [wholePart, fracPart = ""] = amount.split(".");
-  const fracPadded = `${fracPart}0000000`.slice(0, 7);
-  return BigInt(wholePart) * 10_000_000n + BigInt(fracPadded);
-}
-
-async function getNativeBalanceStroops(address: string): Promise<bigint> {
-  const response = await fetch(`https://horizon-testnet.stellar.org/accounts/${address}`);
-  if (!response.ok) {
-    throw new Error(`Failed to load horizon account ${address} (${response.status})`);
-  }
-  const data = (await response.json()) as {
-    balances: Array<{ asset_type: string; balance: string }>;
-  };
-  const native = data.balances.find((b) => b.asset_type === "native");
-  if (!native) {
-    throw new Error(`No native balance found for ${address}`);
-  }
-  return xlmStringToStroops(native.balance);
-}
-
-async function fundWithFriendbot(address: string): Promise<void> {
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const response = await fetch(
-      `https://friendbot.stellar.org?addr=${encodeURIComponent(address)}`,
-    );
-    if (response.ok) return;
-
-    if (response.status === 400) {
-      const horizon = await fetch(`https://horizon-testnet.stellar.org/accounts/${address}`);
-      if (horizon.ok) return;
-    }
-
-    if (attempt < 3) {
-      await sleep(1_000 * attempt);
-      continue;
-    }
-
-    throw new Error(`Friendbot funding failed (${response.status})`);
-  }
-}
-
-function positiveNonceInt64(): xdr.Int64 {
-  const raw = randomBytes(8);
-  const value = BigInt(`0x${raw.toString("hex")}`) & ((1n << 63n) - 1n);
-  return xdr.Int64.fromString(value.toString());
-}
-
-function scvI128FromBigInt(value: bigint): xdr.ScVal {
-  const loMask = (1n << 64n) - 1n;
-  const hi = xdr.Int64.fromString((value >> 64n).toString());
-  const lo = xdr.Uint64.fromString((value & loMask).toString());
-  return xdr.ScVal.scvI128(new xdr.Int128Parts({ hi, lo }));
-}
-
-function buildNativeTransferBundle(
-  nativeAssetContractId: string,
-  fromAddress: string,
-  toAddress: string,
-  amountStroops: bigint,
-): { func: string; auth: string[] } {
-  const args = [
-    xdr.ScVal.scvAddress(Address.fromString(fromAddress).toScAddress()),
-    xdr.ScVal.scvAddress(Address.fromString(toAddress).toScAddress()),
-    scvI128FromBigInt(amountStroops),
-  ];
-
-  const hostFunction = xdr.HostFunction.hostFunctionTypeInvokeContract(
-    new xdr.InvokeContractArgs({
-      contractAddress: Address.fromString(nativeAssetContractId).toScAddress(),
-      functionName: "transfer",
-      args,
-    }),
-  );
-
-  const authEntry = new xdr.SorobanAuthorizationEntry({
-    credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
-      new xdr.SorobanAddressCredentials({
-        address: Address.fromString(fromAddress).toScAddress(),
-        nonce: positiveNonceInt64(),
-        signatureExpirationLedger: 0,
-        signature: xdr.ScVal.scvVoid(),
-      }),
-    ),
-    rootInvocation: new xdr.SorobanAuthorizedInvocation({
-      function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
-        new xdr.InvokeContractArgs({
-          contractAddress: Address.fromString(nativeAssetContractId).toScAddress(),
-          functionName: "transfer",
-          args,
-        }),
-      ),
-      subInvocations: [],
-    }),
-  });
-
-  return {
-    func: hostFunction.toXDR("base64"),
-    auth: [authEntry.toXDR("base64")],
-  };
-}
 
 async function deleteKeychain(path: string): Promise<void> {
   try {
@@ -279,36 +125,54 @@ channels_api_key_ref = "${channelsApiKeyRef}"
           "utf8",
         );
 
-        const create = await execa(
-          "bun",
-          [
-            "src/cli.ts",
-            "wallet",
-            "create",
-            "--config",
-            configPath,
-            "--network",
-            "testnet",
-            "--wasm-hash",
-            wasmHash,
-            "--delegated-address",
-            delegatedAddress,
-            "--salt-hex",
-            saltHex,
-            "--submit",
-            "--submit-mode",
-            "channels",
-            "--out",
-            deployXdrPath,
-          ],
-          { cwd: PROJECT_ROOT },
-        );
-
-        const createOut = JSON.parse(create.stdout) as {
-          contract_id: string;
-          submitted: boolean;
-          submission?: { hash?: string; mode?: string; status?: string };
-        };
+        let createOut:
+          | {
+              contract_id: string;
+              submitted: boolean;
+              submission?: { hash?: string; mode?: string; status?: string };
+            }
+          | undefined;
+        let createError: unknown;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          try {
+            const create = await execa(
+              "bun",
+              [
+                "src/cli.ts",
+                "wallet",
+                "create",
+                "--config",
+                configPath,
+                "--network",
+                "testnet",
+                "--wasm-hash",
+                wasmHash,
+                "--delegated-address",
+                delegatedAddress,
+                "--salt-hex",
+                saltHex,
+                "--submit",
+                "--submit-mode",
+                "channels",
+                "--out",
+                deployXdrPath,
+              ],
+              { cwd: PROJECT_ROOT },
+            );
+            createOut = JSON.parse(create.stdout) as {
+              contract_id: string;
+              submitted: boolean;
+              submission?: { hash?: string; mode?: string; status?: string };
+            };
+            break;
+          } catch (error) {
+            createError = error;
+            if (attempt < 3) {
+              await sleep(1_500 * attempt);
+            }
+          }
+        }
+        if (!createOut) throw createError;
 
         expect(createOut.contract_id.startsWith("C")).toBe(true);
         expect(createOut.submitted).toBe(true);

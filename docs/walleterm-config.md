@@ -126,23 +126,70 @@ network_passphrase = "Test SDF Network ; September 2015"
 [smart_accounts]
 ```
 
-## 5) x402 section
+## 5) payments section
 
-Optional settings for `walleterm pay`:
+Preferred protocol-aware settings for `walleterm pay`:
 
 ```toml
-[x402]
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp]
+default_intent = "charge"
+default_payer_secret_ref = "keychain://walleterm-testnet/payer_seed"
+max_payment_amount = "100000"
+
+[payments.mpp.channel]
+default_channel_contract_id = "C..."
+default_deposit = "10000000"
+factory_contract_id = "C..."
+token_contract_id = "C..."
+recipient = "G..."
+recipient_secret_ref = "keychain://walleterm-testnet/recipient_seed"
+refund_waiting_period = 24
+source_account = "G..."
+state_file = ".walleterm-mpp-channels.json"
+
+[payments.x402]
 default_payer_secret_ref = "keychain://walleterm-testnet/payer_seed"
 max_payment_amount = "0.50"
+default_scheme = "exact"
+
+[payments.x402.channel]
+state_file = ".walleterm-x402-channels.json"
+default_deposit = "1000000"
+max_deposit_amount = "5000000"
+commitment_secret_ref = "keychain://walleterm-testnet/channel_commitment_seed"
 ```
 
 Fields:
-- `default_payer_secret_ref` (optional): Default payer seed for `walleterm pay`. The value must resolve to a Stellar secret seed (`S...`).
-- `max_payment_amount` (optional): Stringified numeric cap for x402 payments. `walleterm pay` aborts if the requested amount exceeds this cap unless `--yes` is passed.
+- `payments.default_protocol` (optional): `x402` or `mpp`. Defaults to `x402` unless `[payments]` selects otherwise.
+- `payments.mpp.default_intent` (optional): `charge` or `channel`. Defaults to `charge`.
+- `payments.mpp.default_payer_secret_ref` (optional): Default Stellar seed for MPP payments.
+- `payments.mpp.max_payment_amount` (optional): Stringified numeric cap for MPP payment amounts.
+- `payments.mpp.channel.default_channel_contract_id` (optional): Default active channel contract for `channel status`, `channel topup`, `channel close`, and as a fallback selector.
+- `payments.mpp.channel.default_deposit` (optional): Default initial deposit in stroops for `channel open`.
+- `payments.mpp.channel.factory_contract_id` (optional): Channel factory contract used by `channel open`.
+- `payments.mpp.channel.token_contract_id` (optional): Token contract used by `channel open`.
+- `payments.mpp.channel.recipient` (optional): Recipient address used by `channel open`.
+- `payments.mpp.channel.recipient_secret_ref` (optional): Recipient-side signer used by `channel settle` and `channel close` unless `--secret-ref` is passed.
+- `payments.mpp.channel.refund_waiting_period` (optional): Refund waiting period in ledgers for `channel open`.
+- `payments.mpp.channel.source_account` (optional): Funded account used for MPP channel commitment simulations when the commitment key is not funded.
+- `payments.mpp.channel.state_file` (optional): Relative path for the local MPP channel state file. Defaults to a file next to the config.
+- `payments.x402.default_payer_secret_ref` (optional): Default payer seed for x402 payments.
+- `payments.x402.max_payment_amount` (optional): Stringified numeric cap for x402 payments.
+- `payments.x402.default_scheme` (optional): `exact`, `channel`, or `auto`. Defaults to `exact`.
+- `payments.x402.channel.state_file` (optional): Relative path for the local x402 channel state file. Defaults to a file next to the config.
+- `payments.x402.channel.default_deposit` (optional): Default initial deposit for x402 state-channel flows.
+- `payments.x402.channel.max_deposit_amount` (optional): Stringified numeric cap for x402 channel deposits.
+- `payments.x402.channel.commitment_secret_ref` (optional): Alternate seed for signing x402 channel commitments. If omitted, the payer seed is reused.
 
 Notes:
 - `walleterm pay` can override `default_payer_secret_ref` with `--secret-ref`.
-- x402 network mapping currently supports the standard Stellar testnet and mainnet passphrases only.
+- `walleterm pay` can override x402 channel settings with `--x402-scheme`, `--x402-channel-deposit`, `--x402-channel-state-file`, and `--x402-channel-commitment-secret-ref`.
+- `walleterm pay` supports four canonical payment modes: x402 `exact`, x402 `channel`, MPP `charge`, and MPP `channel`.
+- `channel open`, `channel topup`, `channel close-start`, and `channel refund` use the MPP funder signer; `channel settle` and `channel close` use the recipient signer.
+- MPP and x402 network mapping currently supports the standard Stellar testnet and mainnet passphrases only.
 - `--dry-run` inspects the 402 challenge without paying.
 
 ## 6) Practical Notes
