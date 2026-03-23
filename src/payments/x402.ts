@@ -1,7 +1,7 @@
-import { Keypair } from "@stellar/stellar-sdk";
 import type { NetworkConfig, X402ChannelConfig, X402Scheme } from "../config.js";
+import type { Signer } from "../signer.js";
 import {
-  createWalletermSigner,
+  type ClientStellarSigner,
   createX402HttpHandler,
   executeX402Request,
   passphraseToX402Network,
@@ -17,9 +17,10 @@ export interface ExecuteX402PaymentOptions {
   body?: string;
   networkName: string;
   network: NetworkConfig;
-  keypair: Keypair;
+  payerSigner: Signer;
+  exactSigner: ClientStellarSigner;
   payerSecretRef?: string;
-  commitmentKeypair: Keypair;
+  commitmentKeypair: Signer;
   commitmentSecretRef?: string;
   schemeSelection: X402Scheme;
   channelConfig?: X402ChannelConfig;
@@ -47,7 +48,7 @@ export async function executeX402Payment(
       rpcUrl: opts.network.rpc_url,
       configPath: opts.configPath,
       schemeSelection: opts.schemeSelection,
-      payerKeypair: opts.keypair,
+      payerKeypair: opts.payerSigner,
       payerSecretRef: opts.payerSecretRef,
       commitmentKeypair: opts.commitmentKeypair,
       commitmentSecretRef: opts.commitmentSecretRef,
@@ -75,7 +76,7 @@ export async function executeX402Payment(
     }
   }
 
-  const signer = createWalletermSigner(opts.keypair, x402Network);
+  const signer = opts.exactSigner;
   const handler = createX402HttpHandler(signer, x402Network, opts.network.rpc_url);
   const result = await executeX402Request(handler, {
     url: opts.url,

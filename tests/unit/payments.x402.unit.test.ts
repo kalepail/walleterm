@@ -3,12 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Account, Keypair, Networks, rpc, StrKey } from "@stellar/stellar-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { KeypairSigner } from "../../src/signer.js";
 import { executeX402Payment } from "../../src/payments/x402.js";
 
 vi.mock("../../src/x402.js", async () => {
   return {
     passphraseToX402Network: vi.fn(() => "stellar:testnet"),
-    createWalletermSigner: vi.fn(() => ({ address: "GMOCK" })),
     createX402HttpHandler: vi.fn(() => ({})),
     executeX402Request: vi.fn(),
   };
@@ -159,8 +159,9 @@ describe("executeX402Payment", () => {
         rpc_url: "https://rpc.example",
         network_passphrase: Networks.TESTNET,
       },
-      keypair: payer,
-      commitmentKeypair: commitment,
+      payerSigner: new KeypairSigner(payer),
+      exactSigner: { address: payer.publicKey(), signAuthEntry: vi.fn() },
+      commitmentKeypair: new KeypairSigner(commitment),
       configPath,
       schemeSelection: "channel",
       dryRun: false,

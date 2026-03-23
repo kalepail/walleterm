@@ -1,4 +1,4 @@
-import { Keypair } from "@stellar/stellar-sdk";
+import { Keypair, hash } from "@stellar/stellar-sdk";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 import type { Network, PaymentPayload, PaymentRequired, SettleResponse } from "@x402/core/types";
 import {
@@ -8,6 +8,8 @@ import {
   createEd25519Signer,
   type ClientStellarSigner,
 } from "@x402/stellar";
+export type { ClientStellarSigner } from "@x402/stellar";
+import type { Signer } from "./signer.js";
 
 const PASSPHRASE_TO_X402_NETWORK = new Map<string, Network>([
   ["Test SDF Network ; September 2015", STELLAR_TESTNET_CAIP2 as Network],
@@ -24,6 +26,18 @@ export function passphraseToX402Network(passphrase: string): Network {
 
 export function createWalletermSigner(keypair: Keypair, network: Network): ClientStellarSigner {
   return createEd25519Signer(keypair.secret(), network);
+}
+
+export function createSshAgentX402Signer(signer: Signer): ClientStellarSigner {
+  const address = signer.publicKey();
+  return {
+    address,
+    async signAuthEntry(authEntry: string) {
+      const data = hash(Buffer.from(authEntry, "base64"));
+      const sig = await signer.sign(data);
+      return { signedAuthEntry: sig.toString("base64"), signerAddress: address };
+    },
+  };
 }
 
 export interface X402HttpHandler {

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Account, Keypair, Networks, rpc, StrKey } from "@stellar/stellar-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { KeypairSigner } from "../../src/signer.js";
 import { executeX402ChannelRequest } from "../../src/x402-channel.js";
 import { resolveStoredChannelByKey, upsertStoredChannel } from "../../src/x402-channel/storage.js";
 import { makeChannelContextKey, normalizeChannelOffer } from "../../src/x402-channel/protocol.js";
@@ -59,8 +60,8 @@ describe("executeX402ChannelRequest", () => {
       rpcUrl: "https://rpc.example",
       configPath: makeTempConfigPath(),
       schemeSelection: "channel",
-      payerKeypair: Keypair.random(),
-      commitmentKeypair: Keypair.random(),
+      payerKeypair: new KeypairSigner(Keypair.random()),
+      commitmentKeypair: new KeypairSigner(Keypair.random()),
       fetchFn: vi.fn().mockResolvedValue(new Response("ok", { status: 200 })),
     });
 
@@ -102,8 +103,8 @@ describe("executeX402ChannelRequest", () => {
         rpcUrl: "https://rpc.example",
         configPath: makeTempConfigPath(),
         schemeSelection: "auto",
-        payerKeypair: Keypair.random(),
-        commitmentKeypair: Keypair.random(),
+        payerKeypair: new KeypairSigner(Keypair.random()),
+        commitmentKeypair: new KeypairSigner(Keypair.random()),
         fetchFn,
       }),
     ).resolves.toEqual({ kind: "fallback-exact" });
@@ -135,8 +136,8 @@ describe("executeX402ChannelRequest", () => {
         rpcUrl: "https://rpc.example",
         configPath: makeTempConfigPath(),
         schemeSelection: "channel",
-        payerKeypair: Keypair.random(),
-        commitmentKeypair: Keypair.random(),
+        payerKeypair: new KeypairSigner(Keypair.random()),
+        commitmentKeypair: new KeypairSigner(Keypair.random()),
         fetchFn: vi.fn().mockImplementation(async () =>
           makeJsonResponse(paymentRequired, 402, {
             "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(paymentRequired), "utf8").toString(
@@ -174,8 +175,8 @@ describe("executeX402ChannelRequest", () => {
       rpcUrl: "https://rpc.example",
       configPath: makeTempConfigPath(),
       schemeSelection: "channel",
-      payerKeypair: Keypair.random(),
-      commitmentKeypair: Keypair.random(),
+      payerKeypair: new KeypairSigner(Keypair.random()),
+      commitmentKeypair: new KeypairSigner(Keypair.random()),
       dryRun: true,
       fetchFn: vi.fn().mockResolvedValue(
         makeJsonResponse(paymentRequired, 402, {
@@ -193,8 +194,8 @@ describe("executeX402ChannelRequest", () => {
   });
 
   it("opens then immediately pays when the real state-channel flow is selected", async () => {
-    const payer = Keypair.random();
-    const commitment = Keypair.random();
+    const payer = new KeypairSigner(Keypair.random());
+    const commitment = new KeypairSigner(Keypair.random());
     const channelContract = StrKey.encodeContract(Buffer.alloc(32, 9));
     const channelId = "ab".repeat(32);
     const configPath = makeTempConfigPath();
@@ -326,8 +327,8 @@ describe("executeX402ChannelRequest", () => {
   });
 
   it("requires a deposit when opening a state channel without defaults", async () => {
-    const payer = Keypair.random();
-    const commitment = Keypair.random();
+    const payer = new KeypairSigner(Keypair.random());
+    const commitment = new KeypairSigner(Keypair.random());
     const paymentRequired = {
       x402Version: 2,
       resource: { url: "https://example.com/resource", mimeType: "text/plain" },
@@ -371,8 +372,8 @@ describe("executeX402ChannelRequest", () => {
   });
 
   it("closes an exhausted state channel before reopening and paying", async () => {
-    const payer = Keypair.random();
-    const commitment = Keypair.random();
+    const payer = new KeypairSigner(Keypair.random());
+    const commitment = new KeypairSigner(Keypair.random());
     const channelContract = StrKey.encodeContract(Buffer.alloc(32, 16));
     const configPath = makeTempConfigPath();
     const statePath = join(tmpdir(), `walleterm-x402-state-${Date.now()}-${Math.random()}.json`);
@@ -541,8 +542,8 @@ describe("executeX402ChannelRequest", () => {
   });
 
   it("surfaces state-channel close, open, and pay errors", async () => {
-    const payer = Keypair.random();
-    const commitment = Keypair.random();
+    const payer = new KeypairSigner(Keypair.random());
+    const commitment = new KeypairSigner(Keypair.random());
     const channelContract = StrKey.encodeContract(Buffer.alloc(32, 18));
     const accepted = {
       scheme: "channel",
@@ -652,8 +653,8 @@ describe("executeX402ChannelRequest", () => {
   });
 
   it("executes demo-channel payments and reuses stored channel state", async () => {
-    const payer = Keypair.random();
-    const commitment = Keypair.random();
+    const payer = new KeypairSigner(Keypair.random());
+    const commitment = new KeypairSigner(Keypair.random());
     const configPath = makeTempConfigPath();
     const statePath = join(tmpdir(), `walleterm-x402-demo-${Date.now()}.json`);
     const paymentRequired = {
@@ -754,8 +755,8 @@ describe("executeX402ChannelRequest", () => {
   });
 
   it("rejects demo-channel deposits that exceed the configured cap", async () => {
-    const payer = Keypair.random();
-    const commitment = Keypair.random();
+    const payer = new KeypairSigner(Keypair.random());
+    const commitment = new KeypairSigner(Keypair.random());
     const paymentRequired = {
       x402Version: 2,
       resource: { url: "https://example.com/resource", mimeType: "text/plain" },
@@ -797,8 +798,8 @@ describe("executeX402ChannelRequest", () => {
   });
 
   it("defaults demo-channel deposits to 100x the request price when none is advertised", async () => {
-    const payer = Keypair.random();
-    const commitment = Keypair.random();
+    const payer = new KeypairSigner(Keypair.random());
+    const commitment = new KeypairSigner(Keypair.random());
     const statePath = join(tmpdir(), `walleterm-x402-demo-${Date.now()}-default-deposit.json`);
     const paymentRequired = {
       x402Version: 2,
@@ -861,8 +862,8 @@ describe("executeX402ChannelRequest", () => {
   });
 
   it("enforces max payment amount for demo-channel payments", async () => {
-    const payer = Keypair.random();
-    const commitment = Keypair.random();
+    const payer = new KeypairSigner(Keypair.random());
+    const commitment = new KeypairSigner(Keypair.random());
     const paymentRequired = {
       x402Version: 2,
       resource: { url: "https://example.com/resource", mimeType: "text/plain" },
@@ -904,8 +905,8 @@ describe("executeX402ChannelRequest", () => {
   });
 
   it("errors when a reused demo channel no longer has enough balance", async () => {
-    const payer = Keypair.random();
-    const commitment = Keypair.random();
+    const payer = new KeypairSigner(Keypair.random());
+    const commitment = new KeypairSigner(Keypair.random());
     const configPath = makeTempConfigPath();
     const statePath = join(tmpdir(), `walleterm-x402-demo-${Date.now()}-insufficient.json`);
     const paymentRequired = {

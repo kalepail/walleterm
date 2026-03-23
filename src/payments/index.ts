@@ -7,6 +7,13 @@ import type {
   X402Scheme,
 } from "../config.js";
 import type { SecretResolver } from "../secrets.js";
+import { isSshAgentRef } from "../secrets.js";
+import { KeypairSigner, createSshAgentSigner } from "../signer.js";
+import {
+  createSshAgentX402Signer,
+  createWalletermSigner,
+  passphraseToX402Network,
+} from "../x402.js";
 import { executeMppPayment } from "./mpp.js";
 import type { PaymentExecution, PaymentExecutionResult } from "./types.js";
 import { executeX402Payment } from "./x402.js";
@@ -130,20 +137,45 @@ export async function executePaymentRequest(
     );
   }
 
-  const secret = await resolver.resolve(secretRef);
-  const { keypair } = resolvePaymentSecret(secret, secretRef);
-  let commitmentKeypair: Keypair | undefined;
+  let payerPublicKey: string;
+  let mppKeypair: Keypair | undefined;
+
+  const x402Payment = protocol === "x402";
+  const x402Network = x402Payment ? passphraseToX402Network(network.network_passphrase) : null;
+
+  let payerSigner: import("../signer.js").Signer | undefined;
+  let exactSigner: import("../x402.js").ClientStellarSigner | undefined;
+
+  if (isSshAgentRef(secretRef)) {
+    const agentSigner = await createSshAgentSigner(secretRef);
+    payerPublicKey = agentSigner.publicKey();
+    payerSigner = agentSigner;
+    if (x402Network) exactSigner = createSshAgentX402Signer(agentSigner);
+  } else {
+    const secret = await resolver.resolve(secretRef);
+    const { keypair } = resolvePaymentSecret(secret, secretRef);
+    payerPublicKey = keypair.publicKey();
+    payerSigner = new KeypairSigner(keypair);
+    if (x402Network) exactSigner = createWalletermSigner(keypair, x402Network);
+    mppKeypair = keypair;
+  }
+
+  let commitmentKeypair: import("../signer.js").Signer = payerSigner!;
   let commitmentSecretRef: string | undefined;
-  if (protocol === "x402") {
+  if (x402Payment) {
     commitmentSecretRef = resolveCommitmentSecretRef(config, opts.x402ChannelCommitmentSecretRef);
     if (commitmentSecretRef) {
-      const commitmentSecret = await resolver.resolve(commitmentSecretRef);
-      try {
-        commitmentKeypair = Keypair.fromSecret(commitmentSecret);
-      } catch {
-        throw new Error(
-          "x402 channel commitment secret ref must resolve to a valid Stellar secret seed (S...)",
-        );
+      if (isSshAgentRef(commitmentSecretRef)) {
+        commitmentKeypair = await createSshAgentSigner(commitmentSecretRef);
+      } else {
+        const commitmentSecret = await resolver.resolve(commitmentSecretRef);
+        try {
+          commitmentKeypair = new KeypairSigner(Keypair.fromSecret(commitmentSecret));
+        } catch {
+          throw new Error(
+            "x402 channel commitment secret ref must resolve to a valid Stellar secret seed (S...)",
+          );
+        }
       }
     }
   }
@@ -160,9 +192,10 @@ export async function executePaymentRequest(
           headers: requestHeaders,
           body: opts.body,
           network,
-          keypair,
+          payerSigner: payerSigner!,
+          exactSigner: exactSigner!,
           payerSecretRef: secretRef,
-          commitmentKeypair: commitmentKeypair ?? keypair,
+          commitmentKeypair,
           commitmentSecretRef,
           networkName,
           configPath: opts.configPath ?? "walleterm.toml",
@@ -182,7 +215,7 @@ export async function executePaymentRequest(
           body: opts.body,
           networkName,
           network,
-          keypair,
+          keypair: mppKeypair!,
           secretRef,
           intent: intent!,
           sourceAccount: opts.sourceAccount ?? config.payments?.mpp?.channel?.source_account,
@@ -196,7 +229,7 @@ export async function executePaymentRequest(
   return {
     protocol,
     intent,
-    payer: keypair.publicKey(),
+    payer: payerPublicKey,
     secretRef,
     result,
   };

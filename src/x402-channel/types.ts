@@ -1,6 +1,6 @@
-import type { Keypair } from "@stellar/stellar-sdk";
 import type { Network, PaymentPayload, PaymentRequired, SettleResponse } from "@x402/core/types";
 import type { X402ChannelConfig, X402Scheme } from "../config.js";
+import type { Signer } from "../signer.js";
 
 export type X402ChannelMode = "state" | "demo";
 
@@ -73,9 +73,9 @@ export interface X402ChannelExecuteOptions {
   rpcUrl: string;
   configPath: string;
   schemeSelection: X402Scheme;
-  payerKeypair: Keypair;
+  payerKeypair: Signer;
   payerSecretRef?: string;
-  commitmentKeypair: Keypair;
+  commitmentKeypair: Signer;
   commitmentSecretRef?: string;
   channelConfig?: X402ChannelConfig;
   depositOverride?: string;

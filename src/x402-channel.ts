@@ -3,12 +3,13 @@ import {
   Address,
   BASE_FEE,
   Contract,
-  Keypair,
+  StrKey,
   TransactionBuilder,
   nativeToScVal,
   rpc,
   xdr,
 } from "@stellar/stellar-sdk";
+import type { Signer } from "./signer.js";
 import type { PaymentPayload, PaymentRequired, SettleResponse } from "@x402/core/types";
 import {
   makeChannelContextKey,
@@ -67,38 +68,40 @@ function writeBigInt128BE(buf: Buffer, value: bigint, offset: number): void {
   buf.writeBigUInt64BE(lo, offset + 8);
 }
 
-function signStateHex(
-  keypair: Keypair,
+async function signStateHex(
+  signer: Signer,
   channelId: string,
   iteration: bigint,
   agentBalance: bigint,
   serverBalance: bigint,
-): string {
+): Promise<string> {
   const channelIdBytes = Buffer.from(channelId, "hex");
   const buf = Buffer.alloc(72);
   channelIdBytes.copy(buf, 0);
   buf.writeBigUInt64BE(iteration, 32);
   writeBigInt128BE(buf, agentBalance, 40);
   writeBigInt128BE(buf, serverBalance, 56);
-  return Buffer.from(keypair.sign(buf)).toString("hex");
+  return Buffer.from(await signer.sign(buf)).toString("hex");
 }
 
-function signCloseIntentHex(keypair: Keypair, channelId: string): string {
+async function signCloseIntentHex(signer: Signer, channelId: string): Promise<string> {
   return Buffer.from(
-    keypair.sign(Buffer.concat([Buffer.from(channelId, "hex"), Buffer.from("close", "utf8")])),
+    await signer.sign(
+      Buffer.concat([Buffer.from(channelId, "hex"), Buffer.from("close", "utf8")]),
+    ),
   ).toString("hex");
 }
 
-function deriveStateChannelId(commitmentKeypair: Keypair, nonce: Buffer): string {
+function deriveStateChannelId(commitmentSigner: Signer, nonce: Buffer): string {
   return createHash("sha256")
-    .update(Buffer.from(commitmentKeypair.rawPublicKey()))
+    .update(Buffer.from(commitmentSigner.rawPublicKey()))
     .update(nonce)
     .digest("hex");
 }
 
-function deriveDemoChannelId(commitmentKeypair: Keypair): string {
+function deriveDemoChannelId(commitmentSigner: Signer): string {
   return createHash("sha256")
-    .update(Buffer.from(commitmentKeypair.rawPublicKey()))
+    .update(Buffer.from(commitmentSigner.rawPublicKey()))
     .update(randomBytes(32))
     .digest("hex");
 }
@@ -118,14 +121,14 @@ async function sendInitialRequest(
 async function buildStateOpenTransaction(
   rpcUrl: string,
   networkPassphrase: string,
-  payerKeypair: Keypair,
+  payerSigner: Signer,
   offer: StateChannelOffer,
-  commitmentKeypair: Keypair,
+  commitmentSigner: Signer,
   deposit: bigint,
   nonce: Buffer,
 ): Promise<string> {
   const server = new rpc.Server(rpcUrl);
-  const account = await server.getAccount(payerKeypair.publicKey());
+  const account = await server.getAccount(payerSigner.publicKey());
   const contract = new Contract(offer.channelContract);
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
@@ -134,12 +137,10 @@ async function buildStateOpenTransaction(
     .addOperation(
       contract.call(
         "open_channel",
-        new Address(payerKeypair.publicKey()).toScVal(),
-        xdr.ScVal.scvBytes(Buffer.from(commitmentKeypair.rawPublicKey())),
+        new Address(payerSigner.publicKey()).toScVal(),
+        xdr.ScVal.scvBytes(Buffer.from(commitmentSigner.rawPublicKey())),
         new Address(offer.payTo).toScVal(),
-        xdr.ScVal.scvBytes(
-          Buffer.from(Keypair.fromPublicKey(offer.serverPublicKey).rawPublicKey()),
-        ),
+        xdr.ScVal.scvBytes(StrKey.decodeEd25519PublicKey(offer.serverPublicKey)),
         new Address(offer.asset).toScVal(),
         nativeToScVal(deposit, { type: "i128" }),
         xdr.ScVal.scvBytes(Buffer.from(nonce)),
@@ -148,7 +149,7 @@ async function buildStateOpenTransaction(
     .setTimeout(Math.max(offer.accepted.maxTimeoutSeconds, 30))
     .build();
   const prepared = await server.prepareTransaction(tx);
-  prepared.sign(payerKeypair);
+  await payerSigner.signTransaction(prepared);
   return prepared.toXDR();
 }
 
@@ -177,7 +178,7 @@ async function closeStateChannel(
     payload: {
       action: "close",
       channelId: stored.channel_id,
-      signature: signCloseIntentHex(opts.commitmentKeypair, stored.channel_id),
+      signature: await signCloseIntentHex(opts.commitmentKeypair, stored.channel_id),
     },
   };
   const response = await opts.fetchFn(opts.url, {
@@ -272,7 +273,13 @@ async function executeStateChannelRequest(
       deposit!,
       nonce,
     );
-    const initialStateSignature = signStateHex(opts.commitmentKeypair, channelId, 0n, deposit!, 0n);
+    const initialStateSignature = await signStateHex(
+      opts.commitmentKeypair,
+      channelId,
+      0n,
+      deposit!,
+      0n,
+    );
     const openPayload: PaymentPayload = {
       x402Version: paymentRequired.x402Version,
       resource: paymentRequired.resource,
@@ -350,7 +357,7 @@ async function executeStateChannelRequest(
     );
   }
 
-  const signature = signStateHex(
+  const signature = await signStateHex(
     opts.commitmentKeypair,
     stored.channel_id,
     nextIteration,
@@ -489,7 +496,7 @@ async function executeDemoChannelRequest(
       `Channel balance ${stored.remaining_balance} is insufficient for payment amount ${offer.price}.`,
     );
   }
-  const signature = signStateHex(
+  const signature = await signStateHex(
     opts.commitmentKeypair,
     stored.channel_id,
     nextIteration,
