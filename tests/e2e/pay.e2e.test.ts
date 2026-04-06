@@ -861,6 +861,22 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     expect(parsed.payment_payload).toBeUndefined();
   });
 
+  it("rejects ssh-agent refs for MPP with a clear error", async () => {
+    const { configPath } = makeFixture();
+    await expect(
+      runCliInProcess([
+        "pay",
+        "https://example.com/resource",
+        "--config",
+        configPath,
+        "--protocol",
+        "mpp",
+        "--secret-ref",
+        "ssh-agent://system/GTESTPAYLOAD",
+      ]),
+    ).rejects.toThrow(/MPP payments currently require a seed-backed secret ref/i);
+  });
+
   it("uses payments.mpp defaults for protocol and payer", async () => {
     const keypair = Keypair.random();
     const rootDir = makeTempDir("walleterm-pay-e2e-");

@@ -152,9 +152,6 @@ export function validateConfig(config: WalletermConfig): void {
     if (network.channels_base_url) {
       warnInsecureUrl(`networks.${name}.channels_base_url`, network.channels_base_url);
     }
-    if (network.x402_facilitator_url) {
-      warnInsecureUrl(`networks.${name}.x402_facilitator_url`, network.x402_facilitator_url);
-    }
   }
 
   for (const [alias, account] of Object.entries(config.smart_accounts)) {

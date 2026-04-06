@@ -170,4 +170,4 @@ All IDs below match the original `docs/security-audit.md` finding identifiers.
 | T4 | Malformed-but-valid-base64 input to `parseInputFile` | **Fixed** — Added 1 test: valid base64 of garbage data, verifies "neither base64 XDR nor JSON" error |
 | T5 | Temp files with seeds not cleaned up in tests | **Partially fixed** — Added `cleanup()` method to `FakeSecurityFixture`, set `mode: 0o600` on log file and store file writes. Some tests still create temp dirs/files without explicit cleanup hooks. |
 | T6 | `as never` casts in mocks mask type drift | **Partially fixed** — Replaced `as never` with `satisfies ChannelsTransactionResponse` on 3 mock return values in submit tests and properly typed `getLatestLedger` mock. Left complex XDR-related casts as-is |
-| T7 | Config type coercion not tested | **Fixed** — Added 1 test: numeric/boolean config values coerce via `String()` without crashing |
+| T7 | Config type coercion not tested | **Fixed** — Added coverage that invalid string/boolean field types are rejected instead of being silently coerced |

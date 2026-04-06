@@ -217,6 +217,23 @@ describe("walleterm channel e2e", () => {
     expect(call.keypair.publicKey()).toBe(funderKeypair.publicKey());
   });
 
+  it("rejects ssh-agent refs for funder-side channel commands", async () => {
+    const { configPath, env } = makeFixture();
+    await expect(
+      runCliInProcess(
+        [
+          "channel",
+          "open",
+          "--config",
+          configPath,
+          "--secret-ref",
+          "ssh-agent://system/GTESTFUNDER",
+        ],
+        env,
+      ),
+    ).rejects.toThrow(/seed-backed secret ref/i);
+  });
+
   it("tops up the active channel", async () => {
     const { configPath, env } = makeFixture();
     const result = await runCliInProcess(
@@ -256,6 +273,23 @@ describe("walleterm channel e2e", () => {
     expect(call.amount).toBe(200n);
     expect(call.signatureHex).toBe("a".repeat(128));
     expect(call.keypair.publicKey()).toBe(recipientKeypair.publicKey());
+  });
+
+  it("rejects ssh-agent refs for recipient-side channel commands", async () => {
+    const { configPath, env } = makeFixture();
+    await expect(
+      runCliInProcess(
+        [
+          "channel",
+          "settle",
+          "--config",
+          configPath,
+          "--secret-ref",
+          "ssh-agent://system/GTESTRECIPIENT",
+        ],
+        env,
+      ),
+    ).rejects.toThrow(/seed-backed secret ref/i);
   });
 
   it("starts close from the funder side", async () => {

@@ -8,6 +8,7 @@
     "walleterm": "src/cli.ts"
   },
   "scripts": {
+    "postinstall": "node ./scripts/prepare-stellar-mpp-sdk.mjs",
     "cli": "bun src/cli.ts",
     "typecheck": "bun x tsc -p tsconfig.json",
     "build": "bun run typecheck && bun run bundle",

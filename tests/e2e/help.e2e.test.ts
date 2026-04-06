@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execa } from "execa";
-
-const PROJECT_ROOT = "/Users/kalepail/Desktop/walleterm";
+import { PROJECT_ROOT } from "../helpers/project-root.js";
 
 describe("walleterm help e2e", () => {
   it("shows only the primary top-level command surface", async () => {

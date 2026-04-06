@@ -1,26 +1,16 @@
 import { Command } from "commander";
 import { Keypair } from "@stellar/stellar-sdk";
-import {
-  closeMppChannel,
-  getMppChannelStatus,
-  openMppChannel,
-  refundMppChannel,
-  settleMppChannel,
-  startMppChannelClose,
-  topUpMppChannel,
-} from "../mpp-channel.js";
 import { loadConfig, resolveNetwork } from "../config.js";
 import { SecretResolver } from "../secrets.js";
 import {
   assertMppChannelRole,
-  parseBigIntAmount,
-  parseOptionalInt,
+  assertSeedBackedMppSecretRef,
   requireMppChannelRecord,
-  requireNonNegativeInt,
   resolveMppChannelStatePath,
   resolveMppFunderSecretRef,
   resolveMppRecipientSecretRef,
-} from "./shared.js";
+} from "./mpp-shared.js";
+import { parseBigIntAmount, parseOptionalInt, requireNonNegativeInt } from "./shared.js";
 
 interface ChannelBaseOpts {
   config: string;
@@ -64,6 +54,10 @@ interface ChannelRefundOpts extends ChannelBaseOpts {
 
 interface ChannelStatusOpts extends ChannelBaseOpts {}
 
+async function loadMppChannelModule() {
+  return import("../mpp-channel.js");
+}
+
 export function registerChannelCommands(program: Command): void {
   const channel = program.command("channel").description("MPP channel lifecycle helpers");
 
@@ -88,6 +82,7 @@ export function registerChannelCommands(program: Command): void {
           "No funder specified. Pass --secret-ref or set payments.mpp.default_payer_secret_ref in config.",
         );
       }
+      assertSeedBackedMppSecretRef(secretRef, "MPP channel open");
       const factoryContractId = opts.factoryContractId ?? channelConfig?.factory_contract_id;
       const tokenContractId = opts.tokenContractId ?? channelConfig?.token_contract_id;
       const recipient = opts.recipient ?? channelConfig?.recipient;
@@ -108,6 +103,7 @@ export function registerChannelCommands(program: Command): void {
 
       const resolver = new SecretResolver();
       try {
+        const { openMppChannel } = await loadMppChannelModule();
         const secret = await resolver.resolve(secretRef);
         const keypair = Keypair.fromSecret(secret);
         const result = await openMppChannel({
@@ -148,9 +144,11 @@ export function registerChannelCommands(program: Command): void {
       if (!secretRef) {
         throw new Error("No funder specified for channel topup.");
       }
+      assertSeedBackedMppSecretRef(secretRef, "MPP channel topup");
 
       const resolver = new SecretResolver();
       try {
+        const { topUpMppChannel } = await loadMppChannelModule();
         const secret = await resolver.resolve(secretRef);
         const keypair = Keypair.fromSecret(secret);
         assertMppChannelRole(record, keypair, "funder");
@@ -184,6 +182,7 @@ export function registerChannelCommands(program: Command): void {
       if (!sourceAccount) {
         throw new Error("MPP channel status requires a funded source account for simulations.");
       }
+      const { getMppChannelStatus } = await loadMppChannelModule();
       const result = await getMppChannelStatus({
         rpcUrl: network.rpc_url,
         networkPassphrase: network.network_passphrase,
@@ -212,6 +211,7 @@ export function registerChannelCommands(program: Command): void {
           "No recipient signer specified for channel settle. Pass --secret-ref or set payments.mpp.channel.recipient_secret_ref.",
         );
       }
+      assertSeedBackedMppSecretRef(secretRef, "MPP channel settle");
       const amountRaw = opts.amount ?? record.last_voucher_amount ?? record.cumulative_amount;
       const signature = opts.signature ?? record.last_voucher_signature;
       if (!amountRaw || !signature) {
@@ -222,6 +222,7 @@ export function registerChannelCommands(program: Command): void {
 
       const resolver = new SecretResolver();
       try {
+        const { settleMppChannel } = await loadMppChannelModule();
         const secret = await resolver.resolve(secretRef);
         const keypair = Keypair.fromSecret(secret);
         assertMppChannelRole(record, keypair, "recipient");
@@ -260,6 +261,7 @@ export function registerChannelCommands(program: Command): void {
           "No recipient signer specified for channel close. Pass --secret-ref or set payments.mpp.channel.recipient_secret_ref.",
         );
       }
+      assertSeedBackedMppSecretRef(secretRef, "MPP channel close");
       const amountRaw = opts.amount ?? record.last_voucher_amount ?? record.cumulative_amount;
       const signature = opts.signature ?? record.last_voucher_signature;
       if (!amountRaw || !signature) {
@@ -270,6 +272,7 @@ export function registerChannelCommands(program: Command): void {
 
       const resolver = new SecretResolver();
       try {
+        const { closeMppChannel } = await loadMppChannelModule();
         const secret = await resolver.resolve(secretRef);
         const keypair = Keypair.fromSecret(secret);
         assertMppChannelRole(record, keypair, "recipient");
@@ -303,9 +306,11 @@ export function registerChannelCommands(program: Command): void {
       if (!secretRef) {
         throw new Error("No funder specified for channel close-start.");
       }
+      assertSeedBackedMppSecretRef(secretRef, "MPP channel close-start");
 
       const resolver = new SecretResolver();
       try {
+        const { startMppChannelClose } = await loadMppChannelModule();
         const secret = await resolver.resolve(secretRef);
         const keypair = Keypair.fromSecret(secret);
         assertMppChannelRole(record, keypair, "funder");
@@ -338,9 +343,11 @@ export function registerChannelCommands(program: Command): void {
       if (!secretRef) {
         throw new Error("No funder specified for channel refund.");
       }
+      assertSeedBackedMppSecretRef(secretRef, "MPP channel refund");
 
       const resolver = new SecretResolver();
       try {
+        const { refundMppChannel } = await loadMppChannelModule();
         const secret = await resolver.resolve(secretRef);
         const keypair = Keypair.fromSecret(secret);
         assertMppChannelRole(record, keypair, "funder");

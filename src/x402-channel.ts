@@ -86,9 +86,7 @@ async function signStateHex(
 
 async function signCloseIntentHex(signer: Signer, channelId: string): Promise<string> {
   return Buffer.from(
-    await signer.sign(
-      Buffer.concat([Buffer.from(channelId, "hex"), Buffer.from("close", "utf8")]),
-    ),
+    await signer.sign(Buffer.concat([Buffer.from(channelId, "hex"), Buffer.from("close", "utf8")])),
   ).toString("hex");
 }
 
