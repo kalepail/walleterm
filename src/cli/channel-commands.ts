@@ -1,14 +1,13 @@
 import { Command } from "commander";
-import { Keypair } from "@stellar/stellar-sdk";
 import { loadConfig, resolveNetwork } from "../config.js";
 import { SecretResolver } from "../secrets.js";
 import {
   assertMppChannelRole,
-  assertSeedBackedMppSecretRef,
   requireMppChannelRecord,
   resolveMppChannelStatePath,
   resolveMppFunderSecretRef,
   resolveMppRecipientSecretRef,
+  resolveSeedBackedMppKeypair,
 } from "./mpp-shared.js";
 import { parseBigIntAmount, parseOptionalInt, requireNonNegativeInt } from "./shared.js";
 
@@ -82,7 +81,6 @@ export function registerChannelCommands(program: Command): void {
           "No funder specified. Pass --secret-ref or set payments.mpp.default_payer_secret_ref in config.",
         );
       }
-      assertSeedBackedMppSecretRef(secretRef, "MPP channel open");
       const factoryContractId = opts.factoryContractId ?? channelConfig?.factory_contract_id;
       const tokenContractId = opts.tokenContractId ?? channelConfig?.token_contract_id;
       const recipient = opts.recipient ?? channelConfig?.recipient;
@@ -104,8 +102,7 @@ export function registerChannelCommands(program: Command): void {
       const resolver = new SecretResolver();
       try {
         const { openMppChannel } = await loadMppChannelModule();
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const keypair = await resolveSeedBackedMppKeypair(resolver, secretRef, "MPP channel open");
         const result = await openMppChannel({
           rpcUrl: network.rpc_url,
           networkName,
@@ -144,13 +141,11 @@ export function registerChannelCommands(program: Command): void {
       if (!secretRef) {
         throw new Error("No funder specified for channel topup.");
       }
-      assertSeedBackedMppSecretRef(secretRef, "MPP channel topup");
 
       const resolver = new SecretResolver();
       try {
         const { topUpMppChannel } = await loadMppChannelModule();
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const keypair = await resolveSeedBackedMppKeypair(resolver, secretRef, "MPP channel topup");
         assertMppChannelRole(record, keypair, "funder");
         const result = await topUpMppChannel({
           rpcUrl: network.rpc_url,
@@ -211,7 +206,6 @@ export function registerChannelCommands(program: Command): void {
           "No recipient signer specified for channel settle. Pass --secret-ref or set payments.mpp.channel.recipient_secret_ref.",
         );
       }
-      assertSeedBackedMppSecretRef(secretRef, "MPP channel settle");
       const amountRaw = opts.amount ?? record.last_voucher_amount ?? record.cumulative_amount;
       const signature = opts.signature ?? record.last_voucher_signature;
       if (!amountRaw || !signature) {
@@ -223,8 +217,11 @@ export function registerChannelCommands(program: Command): void {
       const resolver = new SecretResolver();
       try {
         const { settleMppChannel } = await loadMppChannelModule();
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const keypair = await resolveSeedBackedMppKeypair(
+          resolver,
+          secretRef,
+          "MPP channel settle",
+        );
         assertMppChannelRole(record, keypair, "recipient");
         const result = await settleMppChannel({
           rpcUrl: network.rpc_url,
@@ -261,7 +258,6 @@ export function registerChannelCommands(program: Command): void {
           "No recipient signer specified for channel close. Pass --secret-ref or set payments.mpp.channel.recipient_secret_ref.",
         );
       }
-      assertSeedBackedMppSecretRef(secretRef, "MPP channel close");
       const amountRaw = opts.amount ?? record.last_voucher_amount ?? record.cumulative_amount;
       const signature = opts.signature ?? record.last_voucher_signature;
       if (!amountRaw || !signature) {
@@ -273,8 +269,7 @@ export function registerChannelCommands(program: Command): void {
       const resolver = new SecretResolver();
       try {
         const { closeMppChannel } = await loadMppChannelModule();
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const keypair = await resolveSeedBackedMppKeypair(resolver, secretRef, "MPP channel close");
         assertMppChannelRole(record, keypair, "recipient");
         const result = await closeMppChannel({
           rpcUrl: network.rpc_url,
@@ -306,13 +301,15 @@ export function registerChannelCommands(program: Command): void {
       if (!secretRef) {
         throw new Error("No funder specified for channel close-start.");
       }
-      assertSeedBackedMppSecretRef(secretRef, "MPP channel close-start");
 
       const resolver = new SecretResolver();
       try {
         const { startMppChannelClose } = await loadMppChannelModule();
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const keypair = await resolveSeedBackedMppKeypair(
+          resolver,
+          secretRef,
+          "MPP channel close-start",
+        );
         assertMppChannelRole(record, keypair, "funder");
         const result = await startMppChannelClose({
           rpcUrl: network.rpc_url,
@@ -343,13 +340,15 @@ export function registerChannelCommands(program: Command): void {
       if (!secretRef) {
         throw new Error("No funder specified for channel refund.");
       }
-      assertSeedBackedMppSecretRef(secretRef, "MPP channel refund");
 
       const resolver = new SecretResolver();
       try {
         const { refundMppChannel } = await loadMppChannelModule();
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const keypair = await resolveSeedBackedMppKeypair(
+          resolver,
+          secretRef,
+          "MPP channel refund",
+        );
         assertMppChannelRole(record, keypair, "funder");
         const result = await refundMppChannel({
           rpcUrl: network.rpc_url,

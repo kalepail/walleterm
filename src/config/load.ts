@@ -27,14 +27,6 @@ function asArray<T>(value: unknown, fallback: T[]): T[] {
   return value as T[];
 }
 
-function readRequiredString(value: unknown, context: string): string {
-  if (value === undefined) return "";
-  if (typeof value !== "string") {
-    throw new Error(`${context} must be a string`);
-  }
-  return value;
-}
-
 function readNonEmptyString(value: unknown, context: string): string {
   if (value === undefined) {
     throw new Error(`${context} is required`);
@@ -229,8 +221,8 @@ export function loadConfig(path: string): WalletermConfig {
       throw new Error(`networks.${name}.x402_facilitator_url is no longer supported`);
     }
     networks[name] = {
-      rpc_url: readRequiredString(row.rpc_url, `networks.${name}.rpc_url`),
-      network_passphrase: readRequiredString(
+      rpc_url: readNonEmptyString(row.rpc_url, `networks.${name}.rpc_url`),
+      network_passphrase: readNonEmptyString(
         row.network_passphrase,
         `networks.${name}.network_passphrase`,
       ),
@@ -254,8 +246,8 @@ export function loadConfig(path: string): WalletermConfig {
   for (const [alias, value] of Object.entries(smartAccountsObj)) {
     const row = assertObject(value, `smart_accounts.${alias}`);
     smart_accounts[alias] = {
-      network: readRequiredString(row.network, `smart_accounts.${alias}.network`),
-      contract_id: readRequiredString(row.contract_id, `smart_accounts.${alias}.contract_id`),
+      network: readNonEmptyString(row.network, `smart_accounts.${alias}.network`),
+      contract_id: readNonEmptyString(row.contract_id, `smart_accounts.${alias}.contract_id`),
       expected_wasm_hash: readOptionalString(
         row.expected_wasm_hash,
         `smart_accounts.${alias}.expected_wasm_hash`,
@@ -273,7 +265,7 @@ export function loadConfig(path: string): WalletermConfig {
 
   const config: WalletermConfig = {
     app: {
-      default_network: readRequiredString(appObj.default_network, "app.default_network"),
+      default_network: readNonEmptyString(appObj.default_network, "app.default_network"),
       strict_onchain: readOptionalBoolean(appObj.strict_onchain, "app.strict_onchain") ?? true,
       onchain_signer_mode:
         (readOptionalString(appObj.onchain_signer_mode, "app.onchain_signer_mode") as

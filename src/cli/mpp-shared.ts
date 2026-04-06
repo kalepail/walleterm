@@ -5,7 +5,7 @@ import {
   type StoredMppChannel,
 } from "../mpp-channel.js";
 import type { WalletermConfig } from "../config.js";
-import { isSshAgentRef } from "../secrets.js";
+import { isSshAgentRef, type SecretResolver } from "../secrets.js";
 
 export function resolveMppFunderSecretRef(
   config: WalletermConfig,
@@ -70,5 +70,19 @@ export function assertSeedBackedMppSecretRef(secretRef: string, context: string)
     throw new Error(
       `${context} currently requires a seed-backed secret ref. ssh-agent:// refs are not supported for MPP channel lifecycle commands.`,
     );
+  }
+}
+
+export async function resolveSeedBackedMppKeypair(
+  resolver: SecretResolver,
+  secretRef: string,
+  context: string,
+): Promise<Keypair> {
+  assertSeedBackedMppSecretRef(secretRef, context);
+  const secret = await resolver.resolve(secretRef);
+  try {
+    return Keypair.fromSecret(secret);
+  } catch {
+    throw new Error(`${context} secret ref must resolve to a valid Stellar secret seed (S...)`);
   }
 }

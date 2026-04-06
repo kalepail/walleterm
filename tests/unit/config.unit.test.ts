@@ -65,6 +65,24 @@ describe("config unit", () => {
     expect(() => loadConfig(writeConfig(cfg))).toThrow(/networks\.testnet\.rpc_url is required/i);
   });
 
+  it("throws when required string fields are blank", () => {
+    const blankDefaultNetwork = BASE_CONFIG.replace(
+      'default_network = "testnet"',
+      'default_network = "   "',
+    );
+    expect(() => loadConfig(writeConfig(blankDefaultNetwork))).toThrow(
+      /app\.default_network is required/i,
+    );
+
+    const blankRpcUrl = BASE_CONFIG.replace(
+      'rpc_url = "https://example.test/rpc"',
+      'rpc_url = "   "',
+    );
+    expect(() => loadConfig(writeConfig(blankRpcUrl))).toThrow(
+      /networks\.testnet\.rpc_url is required/i,
+    );
+  });
+
   it("throws when a network is missing network_passphrase", () => {
     const cfg = BASE_CONFIG.replace(
       'network_passphrase = "Test SDF Network ; September 2015"\n',
