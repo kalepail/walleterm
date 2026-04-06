@@ -547,6 +547,10 @@ describe("cli unit", () => {
     await expect(
       run(["sign", "--in", "in.txt", "--out", "out.txt", "--ttl-seconds", "NaN"]),
     ).rejects.toThrow(/Invalid integer value 'NaN'/i);
+
+    await expect(
+      run(["sign", "--in", "in.txt", "--out", "out.txt", "--ttl-seconds", "30seconds"]),
+    ).rejects.toThrow(/Invalid integer value '30seconds'/i);
   });
 
   it("submit rpc rejects non-tx input and succeeds for tx input", async () => {

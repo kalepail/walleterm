@@ -189,7 +189,7 @@ Submission methods:
 - `walleterm pay <url>` makes an HTTP request and retries after signing either an x402 or MPP payment payload when the server responds with HTTP 402.
 - The CLI now delegates pay-path orchestration to `src/payments/*`, with shared protocol selection and result normalization in `src/payments/index.ts` and protocol-specific adapters in `src/payments/x402.ts` and `src/payments/mpp.ts`.
 - Protocol selection comes from `--protocol` or `[payments].default_protocol`, with x402 as the compatibility default.
-- Payer selection is protocol-specific: x402 resolves from `--secret-ref` or `[payments.x402]`; MPP resolves from `--secret-ref` or `[payments.mpp]`.
+- Payer selection is protocol-specific: x402 resolves from `--secret-ref` or `[payments.x402]`; MPP resolves from seed-backed `--secret-ref` values or `[payments.mpp]`.
 - Protocol-specific `max_payment_amount` settings set a payment cap unless `--yes` is passed.
 - `--dry-run` returns the 402 challenge details without paying.
 - The canonical payment modes are x402 `exact`, x402 `channel`, MPP `charge`, and MPP `channel`.
@@ -201,7 +201,7 @@ Top-level sections:
 - `[app]`
   - `default_network`, `strict_onchain`, `onchain_signer_mode`, `default_ttl_seconds`, `assumed_ledger_time_seconds`, `default_submit_mode`
 - `[networks.<name>]`
-  - `rpc_url`, `network_passphrase`, `indexer_url`, `channels_base_url`, `channels_api_key_ref`, `deployer_secret_ref`, `x402_facilitator_url`
+  - `rpc_url`, `network_passphrase`, `indexer_url`, `channels_base_url`, `channels_api_key_ref`, `deployer_secret_ref`
 - `[payments]`
   - `default_protocol`
 - `[payments.mpp]`
@@ -233,7 +233,6 @@ Validation rules:
 - `strict_onchain` and `onchain_signer_mode` are enforced today for `sign` and `wallet signer add/remove` by reconciling configured signers against indexer-reported on-chain signers.
 - `default_submit_mode = channels` is enforced today for `wallet create` by auto-submitting through Channels.
 - `expected_wasm_hash` is validated and can be consumed by `wallet create`, but broader on-chain contract verification remains future work.
-- `x402_facilitator_url` is still config-only and not wired into the current x402 client runtime.
 
 ## Expiration Policy
 - Default auth TTL: 30 seconds.

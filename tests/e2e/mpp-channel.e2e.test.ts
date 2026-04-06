@@ -148,7 +148,7 @@ const settleMppChannelMock = mppChannelModule.settleMppChannel as ReturnType<typ
 const startMppChannelCloseMock = mppChannelModule.startMppChannelClose as ReturnType<typeof vi.fn>;
 const refundMppChannelMock = mppChannelModule.refundMppChannel as ReturnType<typeof vi.fn>;
 
-function makeFixture(extraToml = "") {
+function makeFixture(extraToml = "", storeOverrides: Record<string, string> = {}) {
   const funderKeypair = Keypair.random();
   const recipientKeypair = Keypair.random();
   const rootDir = makeTempDir("walleterm-mpp-channel-e2e-");
@@ -158,6 +158,7 @@ function makeFixture(extraToml = "") {
     JSON.stringify({
       "walleterm-test::default_payer": funderKeypair.secret(),
       "walleterm-test::recipient_signer": recipientKeypair.secret(),
+      ...storeOverrides,
     }),
     "utf8",
   );
@@ -217,6 +218,32 @@ describe("walleterm channel e2e", () => {
     expect(call.keypair.publicKey()).toBe(funderKeypair.publicKey());
   });
 
+  it("rejects ssh-agent refs for funder-side channel commands", async () => {
+    const { configPath, env } = makeFixture();
+    await expect(
+      runCliInProcess(
+        [
+          "channel",
+          "open",
+          "--config",
+          configPath,
+          "--secret-ref",
+          "ssh-agent://system/GTESTFUNDER",
+        ],
+        env,
+      ),
+    ).rejects.toThrow(/seed-backed secret ref/i);
+  });
+
+  it("surfaces invalid seed-backed funder refs clearly", async () => {
+    const { configPath, env } = makeFixture("", {
+      "walleterm-test::default_payer": "not-a-seed",
+    });
+    await expect(runCliInProcess(["channel", "open", "--config", configPath], env)).rejects.toThrow(
+      /MPP channel open secret ref must resolve to a valid Stellar secret seed/i,
+    );
+  });
+
   it("tops up the active channel", async () => {
     const { configPath, env } = makeFixture();
     const result = await runCliInProcess(
@@ -256,6 +283,32 @@ describe("walleterm channel e2e", () => {
     expect(call.amount).toBe(200n);
     expect(call.signatureHex).toBe("a".repeat(128));
     expect(call.keypair.publicKey()).toBe(recipientKeypair.publicKey());
+  });
+
+  it("rejects ssh-agent refs for recipient-side channel commands", async () => {
+    const { configPath, env } = makeFixture();
+    await expect(
+      runCliInProcess(
+        [
+          "channel",
+          "settle",
+          "--config",
+          configPath,
+          "--secret-ref",
+          "ssh-agent://system/GTESTRECIPIENT",
+        ],
+        env,
+      ),
+    ).rejects.toThrow(/seed-backed secret ref/i);
+  });
+
+  it("surfaces invalid seed-backed recipient refs clearly", async () => {
+    const { configPath, env } = makeFixture("", {
+      "walleterm-test::recipient_signer": "not-a-seed",
+    });
+    await expect(
+      runCliInProcess(["channel", "settle", "--config", configPath], env),
+    ).rejects.toThrow(/MPP channel settle secret ref must resolve to a valid Stellar secret seed/i);
   });
 
   it("starts close from the funder side", async () => {

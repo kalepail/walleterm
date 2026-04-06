@@ -14,7 +14,6 @@ import {
   createWalletermSigner,
   passphraseToX402Network,
 } from "../x402.js";
-import { executeMppPayment } from "./mpp.js";
 import type { PaymentExecution, PaymentExecutionResult } from "./types.js";
 import { executeX402Payment } from "./x402.js";
 
@@ -136,6 +135,11 @@ export async function executePaymentRequest(
       "No payer specified. Pass --secret-ref or set a protocol default payer secret ref in config.",
     );
   }
+  if (protocol === "mpp" && isSshAgentRef(secretRef)) {
+    throw new Error(
+      "MPP payments currently require a seed-backed secret ref. ssh-agent:// refs are supported for x402 only.",
+    );
+  }
 
   let payerPublicKey: string;
   let mppKeypair: Keypair | undefined;
@@ -208,23 +212,26 @@ export async function executePaymentRequest(
           yes: opts.yes,
           fetchFn,
         })
-      : await executeMppPayment({
-          url: opts.url,
-          method: opts.method,
-          headers: requestHeaders,
-          body: opts.body,
-          networkName,
-          network,
-          keypair: mppKeypair!,
-          secretRef,
-          intent: intent!,
-          sourceAccount: opts.sourceAccount ?? config.payments?.mpp?.channel?.source_account,
-          dryRun: opts.dryRun,
-          maxPaymentAmount,
-          yes: opts.yes,
-          fetchFn,
-          mppChannelStatePath: opts.mppChannelStatePath,
-        });
+      : await (async () => {
+          const { executeMppPayment } = await import("./mpp.js");
+          return executeMppPayment({
+            url: opts.url,
+            method: opts.method,
+            headers: requestHeaders,
+            body: opts.body,
+            networkName,
+            network,
+            keypair: mppKeypair!,
+            secretRef,
+            intent: intent!,
+            sourceAccount: opts.sourceAccount ?? config.payments?.mpp?.channel?.source_account,
+            dryRun: opts.dryRun,
+            maxPaymentAmount,
+            yes: opts.yes,
+            fetchFn,
+            mppChannelStatePath: opts.mppChannelStatePath,
+          });
+        })();
 
   return {
     protocol,

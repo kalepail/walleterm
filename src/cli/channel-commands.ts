@@ -1,26 +1,15 @@
 import { Command } from "commander";
-import { Keypair } from "@stellar/stellar-sdk";
-import {
-  closeMppChannel,
-  getMppChannelStatus,
-  openMppChannel,
-  refundMppChannel,
-  settleMppChannel,
-  startMppChannelClose,
-  topUpMppChannel,
-} from "../mpp-channel.js";
 import { loadConfig, resolveNetwork } from "../config.js";
 import { SecretResolver } from "../secrets.js";
 import {
   assertMppChannelRole,
-  parseBigIntAmount,
-  parseOptionalInt,
   requireMppChannelRecord,
-  requireNonNegativeInt,
   resolveMppChannelStatePath,
   resolveMppFunderSecretRef,
   resolveMppRecipientSecretRef,
-} from "./shared.js";
+  resolveSeedBackedMppKeypair,
+} from "./mpp-shared.js";
+import { parseBigIntAmount, parseOptionalInt, requireNonNegativeInt } from "./shared.js";
 
 interface ChannelBaseOpts {
   config: string;
@@ -63,6 +52,10 @@ interface ChannelRefundOpts extends ChannelBaseOpts {
 }
 
 interface ChannelStatusOpts extends ChannelBaseOpts {}
+
+async function loadMppChannelModule() {
+  return import("../mpp-channel.js");
+}
 
 export function registerChannelCommands(program: Command): void {
   const channel = program.command("channel").description("MPP channel lifecycle helpers");
@@ -108,8 +101,8 @@ export function registerChannelCommands(program: Command): void {
 
       const resolver = new SecretResolver();
       try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const { openMppChannel } = await loadMppChannelModule();
+        const keypair = await resolveSeedBackedMppKeypair(resolver, secretRef, "MPP channel open");
         const result = await openMppChannel({
           rpcUrl: network.rpc_url,
           networkName,
@@ -151,8 +144,8 @@ export function registerChannelCommands(program: Command): void {
 
       const resolver = new SecretResolver();
       try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const { topUpMppChannel } = await loadMppChannelModule();
+        const keypair = await resolveSeedBackedMppKeypair(resolver, secretRef, "MPP channel topup");
         assertMppChannelRole(record, keypair, "funder");
         const result = await topUpMppChannel({
           rpcUrl: network.rpc_url,
@@ -184,6 +177,7 @@ export function registerChannelCommands(program: Command): void {
       if (!sourceAccount) {
         throw new Error("MPP channel status requires a funded source account for simulations.");
       }
+      const { getMppChannelStatus } = await loadMppChannelModule();
       const result = await getMppChannelStatus({
         rpcUrl: network.rpc_url,
         networkPassphrase: network.network_passphrase,
@@ -222,8 +216,12 @@ export function registerChannelCommands(program: Command): void {
 
       const resolver = new SecretResolver();
       try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const { settleMppChannel } = await loadMppChannelModule();
+        const keypair = await resolveSeedBackedMppKeypair(
+          resolver,
+          secretRef,
+          "MPP channel settle",
+        );
         assertMppChannelRole(record, keypair, "recipient");
         const result = await settleMppChannel({
           rpcUrl: network.rpc_url,
@@ -270,8 +268,8 @@ export function registerChannelCommands(program: Command): void {
 
       const resolver = new SecretResolver();
       try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const { closeMppChannel } = await loadMppChannelModule();
+        const keypair = await resolveSeedBackedMppKeypair(resolver, secretRef, "MPP channel close");
         assertMppChannelRole(record, keypair, "recipient");
         const result = await closeMppChannel({
           rpcUrl: network.rpc_url,
@@ -306,8 +304,12 @@ export function registerChannelCommands(program: Command): void {
 
       const resolver = new SecretResolver();
       try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const { startMppChannelClose } = await loadMppChannelModule();
+        const keypair = await resolveSeedBackedMppKeypair(
+          resolver,
+          secretRef,
+          "MPP channel close-start",
+        );
         assertMppChannelRole(record, keypair, "funder");
         const result = await startMppChannelClose({
           rpcUrl: network.rpc_url,
@@ -341,8 +343,12 @@ export function registerChannelCommands(program: Command): void {
 
       const resolver = new SecretResolver();
       try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
+        const { refundMppChannel } = await loadMppChannelModule();
+        const keypair = await resolveSeedBackedMppKeypair(
+          resolver,
+          secretRef,
+          "MPP channel refund",
+        );
         assertMppChannelRole(record, keypair, "funder");
         const result = await refundMppChannel({
           rpcUrl: network.rpc_url,

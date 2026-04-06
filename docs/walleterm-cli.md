@@ -203,6 +203,7 @@ Request options:
 Behavior notes:
 - All payment defaults live under `[payments.*]`.
 - `pay` supports x402 `exact`, x402 `channel`, MPP `charge`, and MPP `channel`.
+- MPP payment flows require a seed-backed payer secret ref; `ssh-agent://` refs are currently supported for x402 only.
 - If a selected protocol max-payment cap is set, `pay` aborts when the requested amount exceeds that cap unless `--yes` is passed.
 - `--format json` always includes `protocol`, `scheme`, `challenge`, `payment_attempt`, `settlement`, `protocol_error`, and `settlement_error`.
 - For backward compatibility, x402 JSON output still includes `payment_required` and `payment_payload`.
@@ -258,6 +259,7 @@ Behavior notes:
 - `channel settle` and `channel close` can use explicitly passed `--amount` and `--signature`, but default to the latest remembered voucher for the active channel.
 - `channel settle` and `channel close` use `payments.mpp.channel.recipient_secret_ref` unless `--secret-ref` is passed.
 - `channel topup`, `channel close-start`, and `channel refund` use the stored funder signer or `payments.mpp.default_payer_secret_ref`.
+- MPP channel lifecycle commands currently require seed-backed secret refs; `ssh-agent://` refs are not supported for `channel open`, `topup`, `settle`, `close`, `close-start`, or `refund`.
 
 ### 1Password bootstrap wizard
 
