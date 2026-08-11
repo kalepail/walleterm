@@ -108,12 +108,15 @@ function deriveDemoChannelId(commitmentSigner: Signer): string {
 
 async function sendInitialRequest(
   opts: X402ChannelExecuteOptions,
+  initialResponse?: Awaited<ReturnType<X402ChannelExecuteOptions["fetchFn"]>>,
 ): Promise<{ response: Response; bytes: Uint8Array; bodyJson: unknown }> {
-  const response = await opts.fetchFn(opts.url, {
-    method: opts.method ?? "GET",
-    headers: opts.headers,
-    body: opts.body,
-  });
+  const response =
+    initialResponse ??
+    (await opts.fetchFn(opts.url, {
+      method: opts.method ?? "GET",
+      headers: opts.headers,
+      body: opts.body,
+    }));
   const bytes = new Uint8Array(await response.arrayBuffer());
   return { response, bytes, bodyJson: parseResponseBody(bytes) };
 }
@@ -564,8 +567,9 @@ async function executeDemoChannelRequest(
 
 export async function executeX402ChannelRequest(
   opts: X402ChannelExecuteOptions,
+  initialResponse?: Awaited<ReturnType<X402ChannelExecuteOptions["fetchFn"]>>,
 ): Promise<X402ChannelResult | X402ChannelFallbackResult> {
-  const { response, bytes, bodyJson } = await sendInitialRequest(opts);
+  const { response, bytes, bodyJson } = await sendInitialRequest(opts, initialResponse);
   if (response.status !== 402) {
     return {
       kind: "channel",

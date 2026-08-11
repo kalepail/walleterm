@@ -88,10 +88,11 @@ export interface X402Result {
 export async function executeX402Request(
   handler: X402HttpHandler,
   opts: X402FetchOptions,
+  initialResponse?: Awaited<ReturnType<X402FetchOptions["fetchFn"]>>,
 ): Promise<X402Result> {
   const fetchFn = opts.fetchFn;
 
-  const initialResponse = await fetchFn(opts.url, {
+  initialResponse ??= await fetchFn(opts.url, {
     method: opts.method ?? "GET",
     headers: opts.headers,
     body: opts.body,
