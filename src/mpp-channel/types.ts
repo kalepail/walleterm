@@ -24,6 +24,41 @@ export interface StoredMppChannel {
   updated_at: string;
 }
 
+interface MppChannelLifecycleBaseRequest {
+  configPath: string;
+  network?: string;
+  channelId?: string;
+}
+
+export type MppChannelLifecycleRequest =
+  | (MppChannelLifecycleBaseRequest & {
+      action: "open";
+      secretRef?: string;
+      deposit?: string;
+      factoryContractId?: string;
+      tokenContractId?: string;
+      recipient?: string;
+      refundWaitingPeriod?: string;
+    })
+  | (MppChannelLifecycleBaseRequest & {
+      action: "topup";
+      secretRef?: string;
+      amount: string;
+    })
+  | (MppChannelLifecycleBaseRequest & {
+      action: "status";
+    })
+  | (MppChannelLifecycleBaseRequest & {
+      action: "settle" | "close";
+      secretRef?: string;
+      amount?: string;
+      signature?: string;
+    })
+  | (MppChannelLifecycleBaseRequest & {
+      action: "close-start" | "refund";
+      secretRef?: string;
+    });
+
 export interface MppOpenChannelOptions {
   rpcUrl: string;
   networkName: string;

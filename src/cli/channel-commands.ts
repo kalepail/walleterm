@@ -1,26 +1,5 @@
 import { Command } from "commander";
-import { Keypair } from "@stellar/stellar-sdk";
-import {
-  closeMppChannel,
-  getMppChannelStatus,
-  openMppChannel,
-  refundMppChannel,
-  settleMppChannel,
-  startMppChannelClose,
-  topUpMppChannel,
-} from "../mpp-channel.js";
-import { loadConfig, resolveNetwork } from "../config.js";
-import { SecretResolver } from "../secrets.js";
-import {
-  assertMppChannelRole,
-  parseBigIntAmount,
-  parseOptionalInt,
-  requireMppChannelRecord,
-  requireNonNegativeInt,
-  resolveMppChannelStatePath,
-  resolveMppFunderSecretRef,
-  resolveMppRecipientSecretRef,
-} from "./shared.js";
+import { executeMppChannelLifecycle, type MppChannelLifecycleRequest } from "../mpp-channel.js";
 
 interface ChannelBaseOpts {
   config: string;
@@ -42,27 +21,20 @@ interface ChannelTopUpOpts extends ChannelBaseOpts {
   amount: string;
 }
 
-interface ChannelCloseOpts extends ChannelBaseOpts {
+interface ChannelVoucherOpts extends ChannelBaseOpts {
   secretRef?: string;
   amount?: string;
   signature?: string;
 }
 
-interface ChannelSettleOpts extends ChannelBaseOpts {
-  secretRef?: string;
-  amount?: string;
-  signature?: string;
-}
-
-interface ChannelCloseStartOpts extends ChannelBaseOpts {
+interface ChannelFunderOpts extends ChannelBaseOpts {
   secretRef?: string;
 }
 
-interface ChannelRefundOpts extends ChannelBaseOpts {
-  secretRef?: string;
+async function runLifecycle(request: MppChannelLifecycleRequest): Promise<void> {
+  const result = await executeMppChannelLifecycle(request);
+  process.stdout.write(`${JSON.stringify(result)}\n`);
 }
-
-interface ChannelStatusOpts extends ChannelBaseOpts {}
 
 export function registerChannelCommands(program: Command): void {
   const channel = program.command("channel").description("MPP channel lifecycle helpers");
@@ -78,59 +50,19 @@ export function registerChannelCommands(program: Command): void {
     .option("--token-contract-id <id>", "token contract address")
     .option("--recipient <address>", "recipient address")
     .option("--refund-waiting-period <ledgers>", "refund waiting period in ledgers")
-    .action(async (opts: ChannelOpenOpts) => {
-      const config = loadConfig(opts.config);
-      const { name: networkName, config: network } = resolveNetwork(config, opts.network);
-      const channelConfig = config.payments?.mpp?.channel;
-      const secretRef = resolveMppFunderSecretRef(config, opts.secretRef);
-      if (!secretRef) {
-        throw new Error(
-          "No funder specified. Pass --secret-ref or set payments.mpp.default_payer_secret_ref in config.",
-        );
-      }
-      const factoryContractId = opts.factoryContractId ?? channelConfig?.factory_contract_id;
-      const tokenContractId = opts.tokenContractId ?? channelConfig?.token_contract_id;
-      const recipient = opts.recipient ?? channelConfig?.recipient;
-      const depositRaw = opts.deposit ?? channelConfig?.default_deposit;
-      const refundWaitingPeriodRaw =
-        opts.refundWaitingPeriod ?? channelConfig?.refund_waiting_period?.toString();
-      if (
-        !factoryContractId ||
-        !tokenContractId ||
-        !recipient ||
-        !depositRaw ||
-        !refundWaitingPeriodRaw
-      ) {
-        throw new Error(
-          "MPP channel open requires factory contract, token contract, recipient, deposit, and refund waiting period. Set them in flags or payments.mpp.channel config.",
-        );
-      }
-
-      const resolver = new SecretResolver();
-      try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
-        const result = await openMppChannel({
-          rpcUrl: network.rpc_url,
-          networkName,
-          networkPassphrase: network.network_passphrase,
-          keypair,
-          factoryContractId,
-          tokenContractId,
-          recipient,
-          deposit: parseBigIntAmount(depositRaw, "deposit"),
-          refundWaitingPeriod: requireNonNegativeInt(
-            parseOptionalInt(refundWaitingPeriodRaw),
-            "refund_waiting_period",
-          ),
-          statePath: resolveMppChannelStatePath(opts.config, config),
-          secretRef,
-        });
-        process.stdout.write(`${JSON.stringify(result)}\n`);
-      } finally {
-        resolver.clearCache();
-      }
-    });
+    .action((opts: ChannelOpenOpts) =>
+      runLifecycle({
+        action: "open",
+        configPath: opts.config,
+        network: opts.network,
+        secretRef: opts.secretRef,
+        deposit: opts.deposit,
+        factoryContractId: opts.factoryContractId,
+        tokenContractId: opts.tokenContractId,
+        recipient: opts.recipient,
+        refundWaitingPeriod: opts.refundWaitingPeriod,
+      }),
+    );
 
   channel
     .command("topup")
@@ -140,35 +72,16 @@ export function registerChannelCommands(program: Command): void {
     .option("--network <name>", "network name")
     .option("--channel-id <id>", "channel contract address")
     .option("--secret-ref <ref>", "funder keypair secret ref")
-    .action(async (opts: ChannelTopUpOpts) => {
-      const config = loadConfig(opts.config);
-      const { name: networkName, config: network } = resolveNetwork(config, opts.network);
-      const record = requireMppChannelRecord(opts.config, config, networkName, opts.channelId);
-      const secretRef = opts.secretRef ?? record.secret_ref ?? resolveMppFunderSecretRef(config);
-      if (!secretRef) {
-        throw new Error("No funder specified for channel topup.");
-      }
-
-      const resolver = new SecretResolver();
-      try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
-        assertMppChannelRole(record, keypair, "funder");
-        const result = await topUpMppChannel({
-          rpcUrl: network.rpc_url,
-          networkName,
-          networkPassphrase: network.network_passphrase,
-          keypair,
-          channelId: record.channel_id,
-          amount: parseBigIntAmount(opts.amount, "amount"),
-          statePath: resolveMppChannelStatePath(opts.config, config),
-          secretRef,
-        });
-        process.stdout.write(`${JSON.stringify(result)}\n`);
-      } finally {
-        resolver.clearCache();
-      }
-    });
+    .action((opts: ChannelTopUpOpts) =>
+      runLifecycle({
+        action: "topup",
+        configPath: opts.config,
+        network: opts.network,
+        channelId: opts.channelId,
+        secretRef: opts.secretRef,
+        amount: opts.amount,
+      }),
+    );
 
   channel
     .command("status")
@@ -176,22 +89,14 @@ export function registerChannelCommands(program: Command): void {
     .option("--config <path>", "config TOML path", "walleterm.toml")
     .option("--network <name>", "network name")
     .option("--channel-id <id>", "channel contract address")
-    .action(async (opts: ChannelStatusOpts) => {
-      const config = loadConfig(opts.config);
-      const { name: networkName, config: network } = resolveNetwork(config, opts.network);
-      const record = requireMppChannelRecord(opts.config, config, networkName, opts.channelId);
-      const sourceAccount = record.source_account ?? config.payments?.mpp?.channel?.source_account;
-      if (!sourceAccount) {
-        throw new Error("MPP channel status requires a funded source account for simulations.");
-      }
-      const result = await getMppChannelStatus({
-        rpcUrl: network.rpc_url,
-        networkPassphrase: network.network_passphrase,
-        channelId: record.channel_id,
-        sourceAccount,
-      });
-      process.stdout.write(`${JSON.stringify({ ...result, stored: record })}\n`);
-    });
+    .action((opts: ChannelBaseOpts) =>
+      runLifecycle({
+        action: "status",
+        configPath: opts.config,
+        network: opts.network,
+        channelId: opts.channelId,
+      }),
+    );
 
   channel
     .command("settle")
@@ -202,44 +107,17 @@ export function registerChannelCommands(program: Command): void {
     .option("--secret-ref <ref>", "recipient transaction signer secret ref")
     .option("--amount <amount>", "cumulative amount in stroops")
     .option("--signature <hex>", "voucher signature hex")
-    .action(async (opts: ChannelSettleOpts) => {
-      const config = loadConfig(opts.config);
-      const { name: networkName, config: network } = resolveNetwork(config, opts.network);
-      const record = requireMppChannelRecord(opts.config, config, networkName, opts.channelId);
-      const secretRef = resolveMppRecipientSecretRef(config, opts.secretRef);
-      if (!secretRef) {
-        throw new Error(
-          "No recipient signer specified for channel settle. Pass --secret-ref or set payments.mpp.channel.recipient_secret_ref.",
-        );
-      }
-      const amountRaw = opts.amount ?? record.last_voucher_amount ?? record.cumulative_amount;
-      const signature = opts.signature ?? record.last_voucher_signature;
-      if (!amountRaw || !signature) {
-        throw new Error(
-          "No settlement voucher available. Pass --amount and --signature, or make at least one MPP channel payment first.",
-        );
-      }
-
-      const resolver = new SecretResolver();
-      try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
-        assertMppChannelRole(record, keypair, "recipient");
-        const result = await settleMppChannel({
-          rpcUrl: network.rpc_url,
-          networkName,
-          networkPassphrase: network.network_passphrase,
-          keypair,
-          channelId: record.channel_id,
-          amount: parseBigIntAmount(amountRaw, "amount"),
-          signatureHex: signature,
-          statePath: resolveMppChannelStatePath(opts.config, config),
-        });
-        process.stdout.write(`${JSON.stringify(result)}\n`);
-      } finally {
-        resolver.clearCache();
-      }
-    });
+    .action((opts: ChannelVoucherOpts) =>
+      runLifecycle({
+        action: "settle",
+        configPath: opts.config,
+        network: opts.network,
+        channelId: opts.channelId,
+        secretRef: opts.secretRef,
+        amount: opts.amount,
+        signature: opts.signature,
+      }),
+    );
 
   channel
     .command("close")
@@ -250,43 +128,17 @@ export function registerChannelCommands(program: Command): void {
     .option("--secret-ref <ref>", "recipient transaction signer secret ref")
     .option("--amount <amount>", "cumulative amount in stroops")
     .option("--signature <hex>", "voucher signature hex")
-    .action(async (opts: ChannelCloseOpts) => {
-      const config = loadConfig(opts.config);
-      const { name: networkName, config: network } = resolveNetwork(config, opts.network);
-      const record = requireMppChannelRecord(opts.config, config, networkName, opts.channelId);
-      const secretRef = resolveMppRecipientSecretRef(config, opts.secretRef);
-      if (!secretRef) {
-        throw new Error(
-          "No recipient signer specified for channel close. Pass --secret-ref or set payments.mpp.channel.recipient_secret_ref.",
-        );
-      }
-      const amountRaw = opts.amount ?? record.last_voucher_amount ?? record.cumulative_amount;
-      const signature = opts.signature ?? record.last_voucher_signature;
-      if (!amountRaw || !signature) {
-        throw new Error(
-          "No close voucher available. Pass --amount and --signature, or make at least one MPP channel payment first.",
-        );
-      }
-
-      const resolver = new SecretResolver();
-      try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
-        assertMppChannelRole(record, keypair, "recipient");
-        const result = await closeMppChannel({
-          rpcUrl: network.rpc_url,
-          networkPassphrase: network.network_passphrase,
-          keypair,
-          channelId: record.channel_id,
-          amount: parseBigIntAmount(amountRaw, "amount"),
-          signatureHex: signature,
-          statePath: resolveMppChannelStatePath(opts.config, config),
-        });
-        process.stdout.write(`${JSON.stringify(result)}\n`);
-      } finally {
-        resolver.clearCache();
-      }
-    });
+    .action((opts: ChannelVoucherOpts) =>
+      runLifecycle({
+        action: "close",
+        configPath: opts.config,
+        network: opts.network,
+        channelId: opts.channelId,
+        secretRef: opts.secretRef,
+        amount: opts.amount,
+        signature: opts.signature,
+      }),
+    );
 
   channel
     .command("close-start")
@@ -295,33 +147,15 @@ export function registerChannelCommands(program: Command): void {
     .option("--network <name>", "network name")
     .option("--channel-id <id>", "channel contract address")
     .option("--secret-ref <ref>", "funder keypair secret ref")
-    .action(async (opts: ChannelCloseStartOpts) => {
-      const config = loadConfig(opts.config);
-      const { name: networkName, config: network } = resolveNetwork(config, opts.network);
-      const record = requireMppChannelRecord(opts.config, config, networkName, opts.channelId);
-      const secretRef = opts.secretRef ?? record.secret_ref ?? resolveMppFunderSecretRef(config);
-      if (!secretRef) {
-        throw new Error("No funder specified for channel close-start.");
-      }
-
-      const resolver = new SecretResolver();
-      try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
-        assertMppChannelRole(record, keypair, "funder");
-        const result = await startMppChannelClose({
-          rpcUrl: network.rpc_url,
-          networkName,
-          networkPassphrase: network.network_passphrase,
-          keypair,
-          channelId: record.channel_id,
-          statePath: resolveMppChannelStatePath(opts.config, config),
-        });
-        process.stdout.write(`${JSON.stringify(result)}\n`);
-      } finally {
-        resolver.clearCache();
-      }
-    });
+    .action((opts: ChannelFunderOpts) =>
+      runLifecycle({
+        action: "close-start",
+        configPath: opts.config,
+        network: opts.network,
+        channelId: opts.channelId,
+        secretRef: opts.secretRef,
+      }),
+    );
 
   channel
     .command("refund")
@@ -330,31 +164,13 @@ export function registerChannelCommands(program: Command): void {
     .option("--network <name>", "network name")
     .option("--channel-id <id>", "channel contract address")
     .option("--secret-ref <ref>", "funder keypair secret ref")
-    .action(async (opts: ChannelRefundOpts) => {
-      const config = loadConfig(opts.config);
-      const { name: networkName, config: network } = resolveNetwork(config, opts.network);
-      const record = requireMppChannelRecord(opts.config, config, networkName, opts.channelId);
-      const secretRef = opts.secretRef ?? record.secret_ref ?? resolveMppFunderSecretRef(config);
-      if (!secretRef) {
-        throw new Error("No funder specified for channel refund.");
-      }
-
-      const resolver = new SecretResolver();
-      try {
-        const secret = await resolver.resolve(secretRef);
-        const keypair = Keypair.fromSecret(secret);
-        assertMppChannelRole(record, keypair, "funder");
-        const result = await refundMppChannel({
-          rpcUrl: network.rpc_url,
-          networkName,
-          networkPassphrase: network.network_passphrase,
-          keypair,
-          channelId: record.channel_id,
-          statePath: resolveMppChannelStatePath(opts.config, config),
-        });
-        process.stdout.write(`${JSON.stringify(result)}\n`);
-      } finally {
-        resolver.clearCache();
-      }
-    });
+    .action((opts: ChannelFunderOpts) =>
+      runLifecycle({
+        action: "refund",
+        configPath: opts.config,
+        network: opts.network,
+        channelId: opts.channelId,
+        secretRef: opts.secretRef,
+      }),
+    );
 }
