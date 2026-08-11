@@ -47,6 +47,52 @@ export interface SignReport {
   details: SignDetail[];
 }
 
+export interface SigningInputContext {
+  account: string;
+  contractId: string;
+  expirationLedger: number;
+}
+
+export interface ConfiguredReviewRequest {
+  config: WalletermConfig;
+  input: ParsedInput;
+  network?: string;
+  account?: string;
+}
+
+export type ConfiguredReviewResult =
+  | {
+      inspection: Record<string, unknown>;
+      signability: null;
+      account: null;
+      note: string;
+    }
+  | {
+      inspection: Record<string, unknown>;
+      signability: Record<string, unknown>;
+      account: string;
+      contract_id: string;
+      signer_reconciliation: unknown;
+      signer_reconciliation_error: string | null;
+    };
+
+export interface ConfiguredSignRequest {
+  config: WalletermConfig;
+  input: ParsedInput | ((context: SigningInputContext) => ParsedInput);
+  network?: string;
+  account?: string;
+  ttlSeconds?: number;
+  latestLedger?: number;
+}
+
+export interface ConfiguredSignResult {
+  output: string;
+  report: SignReport;
+  account: string;
+  contractId: string;
+  expirationLedger: number;
+}
+
 export type ParsedInput =
   | {
       kind: "tx";
