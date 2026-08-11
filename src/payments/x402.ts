@@ -36,30 +36,42 @@ export async function executeX402Payment(
   opts: ExecuteX402PaymentOptions,
 ): Promise<PaymentExecutionResult> {
   const x402Network = passphraseToX402Network(opts.network.network_passphrase);
+  const initialResponse =
+    opts.schemeSelection === "auto"
+      ? await opts.fetchFn(opts.url, {
+          method: opts.method ?? "GET",
+          headers: opts.headers,
+          body: opts.body,
+        })
+      : undefined;
+  const exactFallbackResponse = initialResponse?.clone() as typeof initialResponse;
   if (opts.schemeSelection === "channel" || opts.schemeSelection === "auto") {
-    const channelResult = await executeX402ChannelRequest({
-      url: opts.url,
-      method: opts.method,
-      headers: opts.headers,
-      body: opts.body,
-      x402Network,
-      networkName: opts.networkName,
-      networkPassphrase: opts.network.network_passphrase,
-      rpcUrl: opts.network.rpc_url,
-      configPath: opts.configPath,
-      schemeSelection: opts.schemeSelection,
-      payerKeypair: opts.payerSigner,
-      payerSecretRef: opts.payerSecretRef,
-      commitmentKeypair: opts.commitmentKeypair,
-      commitmentSecretRef: opts.commitmentSecretRef,
-      channelConfig: opts.channelConfig,
-      depositOverride: opts.depositOverride,
-      statePathOverride: opts.statePathOverride,
-      dryRun: opts.dryRun,
-      maxPaymentAmount: opts.maxPaymentAmount,
-      yes: opts.yes,
-      fetchFn: opts.fetchFn,
-    });
+    const channelResult = await executeX402ChannelRequest(
+      {
+        url: opts.url,
+        method: opts.method,
+        headers: opts.headers,
+        body: opts.body,
+        x402Network,
+        networkName: opts.networkName,
+        networkPassphrase: opts.network.network_passphrase,
+        rpcUrl: opts.network.rpc_url,
+        configPath: opts.configPath,
+        schemeSelection: opts.schemeSelection,
+        payerKeypair: opts.payerSigner,
+        payerSecretRef: opts.payerSecretRef,
+        commitmentKeypair: opts.commitmentKeypair,
+        commitmentSecretRef: opts.commitmentSecretRef,
+        channelConfig: opts.channelConfig,
+        depositOverride: opts.depositOverride,
+        statePathOverride: opts.statePathOverride,
+        dryRun: opts.dryRun,
+        maxPaymentAmount: opts.maxPaymentAmount,
+        yes: opts.yes,
+        fetchFn: opts.fetchFn,
+      },
+      initialResponse,
+    );
     if (channelResult.kind !== "fallback-exact") {
       return {
         scheme: channelResult.scheme,
@@ -78,17 +90,21 @@ export async function executeX402Payment(
 
   const signer = opts.exactSigner;
   const handler = createX402HttpHandler(signer, x402Network, opts.network.rpc_url);
-  const result = await executeX402Request(handler, {
-    url: opts.url,
-    method: opts.method,
-    headers: opts.headers,
-    body: opts.body,
-    x402Network,
-    dryRun: opts.dryRun,
-    maxPaymentAmount: opts.maxPaymentAmount,
-    yes: opts.yes,
-    fetchFn: opts.fetchFn,
-  });
+  const result = await executeX402Request(
+    handler,
+    {
+      url: opts.url,
+      method: opts.method,
+      headers: opts.headers,
+      body: opts.body,
+      x402Network,
+      dryRun: opts.dryRun,
+      maxPaymentAmount: opts.maxPaymentAmount,
+      yes: opts.yes,
+      fetchFn: opts.fetchFn,
+    },
+    exactFallbackResponse,
+  );
 
   return {
     scheme: "exact",
