@@ -4,3 +4,4 @@ export { parseInputFile, writeOutput } from "./core/input.js";
 export { inspectInput, canSignInput } from "./core/inspect.js";
 export { listSignerConfig, loadRuntimeSigners } from "./core/runtime-signers.js";
 export { computeExpirationLedger, signInput } from "./core/sign.js";
+export { reviewConfiguredInput, signConfiguredInput } from "./core/signing-engine.js";

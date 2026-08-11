@@ -1,14 +1,13 @@
 import { Command } from "commander";
 import { Keypair, xdr } from "@stellar/stellar-sdk";
-import { computeExpirationLedger, loadRuntimeSigners, signInput, writeOutput } from "../core.js";
-import { loadConfig, resolveNetwork } from "../config.js";
+import { signConfiguredInput, writeOutput } from "../core.js";
+import { loadConfig } from "../config.js";
 import { SecretResolver } from "../secrets.js";
 import {
   buildSignerMutationBundle,
   makeDelegatedSignerScVal,
   makeExternalSignerScVal,
 } from "../wallet.js";
-import { enforceStrictOnchainSigners } from "./onchain-signers.js";
 import {
   buildKeypairJson,
   credentialIdFromKeypair,
@@ -129,68 +128,38 @@ async function runSignerMutation(
   signerDescriptor: Record<string, unknown>,
 ): Promise<void> {
   const config = loadConfig(opts.config);
-  const { name: networkName, config: network } = resolveNetwork(config, opts.network);
-  const accountAlias = opts.account;
-  const account = config.smart_accounts[accountAlias];
-  if (!account) throw new Error(`Smart account '${accountAlias}' not found`);
-  if (account.network !== networkName) {
-    throw new Error(
-      `Smart account '${accountAlias}' belongs to network '${account.network}', not '${networkName}'`,
-    );
-  }
+  let contextRuleId: number | undefined;
+  const { output, report, contractId } = await signConfiguredInput({
+    config,
+    network: opts.network,
+    account: opts.account,
+    ttlSeconds: parseOptionalInt(opts.ttlSeconds),
+    latestLedger: parseOptionalInt(opts.latestLedger),
+    input: ({ contractId: selectedContractId, expirationLedger }) => {
+      contextRuleId = requireNonNegativeInt(
+        parseOptionalInt(opts.contextRuleId),
+        "context-rule-id",
+      );
+      return buildSignerMutationBundle(
+        selectedContractId,
+        functionName,
+        contextRuleId,
+        signerScVal,
+        expirationLedger,
+      );
+    },
+  });
 
-  await enforceStrictOnchainSigners(config, network, accountAlias, account);
-
-  const resolver = new SecretResolver();
-  try {
-    const accountRef = { alias: accountAlias, account };
-    const runtimeSigners = await loadRuntimeSigners(accountRef, resolver);
-
-    const ttlSeconds = parseOptionalInt(opts.ttlSeconds) ?? config.app.default_ttl_seconds ?? 30;
-    const ledgerSeconds = config.app.assumed_ledger_time_seconds ?? 6;
-    const latestLedger = parseOptionalInt(opts.latestLedger);
-    const expirationLedger = await computeExpirationLedger(
-      network,
-      ttlSeconds,
-      ledgerSeconds,
-      latestLedger,
-    );
-
-    const contextRuleId = requireNonNegativeInt(
-      parseOptionalInt(opts.contextRuleId),
-      "context-rule-id",
-    );
-
-    const parsed = buildSignerMutationBundle(
-      account.contract_id,
-      functionName,
-      contextRuleId,
-      signerScVal,
-      expirationLedger,
-    );
-
-    const { output, report } = await signInput(parsed, {
-      config,
-      networkName,
-      network,
-      accountRef,
-      runtimeSigners,
-      expirationLedger,
-    });
-
-    writeOutput(opts.out, output);
-    process.stdout.write(
-      `${JSON.stringify({
-        operation: functionName,
-        contract_id: account.contract_id,
-        context_rule_id: contextRuleId,
-        target_signer: signerDescriptor,
-        ...report,
-      })}\n`,
-    );
-  } finally {
-    resolver.clearCache();
-  }
+  writeOutput(opts.out, output);
+  process.stdout.write(
+    `${JSON.stringify({
+      operation: functionName,
+      contract_id: contractId,
+      context_rule_id: contextRuleId,
+      target_signer: signerDescriptor,
+      ...report,
+    })}\n`,
+  );
 }
 
 export function registerWalletSignerCommands(wallet: Command): void {
