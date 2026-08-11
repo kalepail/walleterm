@@ -1,4 +1,6 @@
-import { type Keypair, xdr } from "@stellar/stellar-sdk";
+import { Keypair, hash, xdr } from "@stellar/stellar-sdk";
+import { basicNodeSigner, type SignAuthEntry } from "@stellar/stellar-sdk/contract";
+import { isSshAgentRef, type SecretResolver } from "./secrets.js";
 import { agentSign, findAgentIdentity, parseSshAgentRef, resolveSocketPath } from "./ssh-agent.js";
 
 export interface Signer {
@@ -10,7 +12,24 @@ export interface Signer {
   signTransaction(tx: { hash(): Buffer; signatures: xdr.DecoratedSignature[] }): Promise<void>;
 }
 
-export class KeypairSigner implements Signer {
+export interface AuthEntrySigner {
+  address: string;
+  signAuthEntry: SignAuthEntry;
+}
+
+export interface PaymentSigner extends Signer {
+  authEntrySigner(networkPassphrase: string): AuthEntrySigner;
+}
+
+export interface MppPaymentSigner extends Signer {
+  secretSeed(): string;
+}
+
+export function isMppPaymentSigner(signer: Signer): signer is MppPaymentSigner {
+  return "secretSeed" in signer && typeof signer.secretSeed === "function";
+}
+
+export class KeypairSigner implements PaymentSigner, MppPaymentSigner {
   private readonly keypair: Keypair;
 
   constructor(keypair: Keypair) {
@@ -46,9 +65,18 @@ export class KeypairSigner implements Signer {
     const decorated = await this.signDecorated(tx.hash());
     tx.signatures.push(decorated);
   }
+
+  authEntrySigner(networkPassphrase: string): AuthEntrySigner {
+    const { signAuthEntry } = basicNodeSigner(this.keypair, networkPassphrase);
+    return { address: this.publicKey(), signAuthEntry };
+  }
+
+  secretSeed(): string {
+    return this.keypair.secret();
+  }
 }
 
-export class SshAgentSigner implements Signer {
+export class SshAgentSigner implements PaymentSigner {
   private readonly stellarPublicKey: string;
   private readonly rawPubKey: Buffer;
   private readonly keyBlob: Buffer;
@@ -90,6 +118,18 @@ export class SshAgentSigner implements Signer {
     const decorated = await this.signDecorated(tx.hash());
     tx.signatures.push(decorated);
   }
+
+  authEntrySigner(_networkPassphrase: string): AuthEntrySigner {
+    const address = this.publicKey();
+    return {
+      address,
+      signAuthEntry: async (authEntry: string) => {
+        const data = hash(Buffer.from(authEntry, "base64"));
+        const signature = await this.sign(data);
+        return { signedAuthEntry: signature.toString("base64"), signerAddress: address };
+      },
+    };
+  }
 }
 
 export async function createSshAgentSigner(ref: string): Promise<SshAgentSigner> {
@@ -109,4 +149,21 @@ export async function createSshAgentSigner(ref: string): Promise<SshAgentSigner>
     identity.keyBlob,
     socketPath,
   );
+}
+
+export async function resolvePaymentSigner(
+  ref: string,
+  resolver: SecretResolver,
+  invalidSecretMessage = "secret-ref must resolve to a valid Stellar secret seed (S...)",
+): Promise<PaymentSigner> {
+  if (isSshAgentRef(ref)) {
+    return createSshAgentSigner(ref);
+  }
+
+  const secret = await resolver.resolve(ref);
+  try {
+    return new KeypairSigner(Keypair.fromSecret(secret));
+  } catch {
+    throw new Error(invalidSecretMessage);
+  }
 }
