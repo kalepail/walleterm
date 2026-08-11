@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { execa } from "execa";
+import { fileURLToPath } from "node:url";
 
-const PROJECT_ROOT = "/Users/kalepail/Desktop/walleterm";
+const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 describe("walleterm help e2e", () => {
   it("shows only the primary top-level command surface", async () => {
