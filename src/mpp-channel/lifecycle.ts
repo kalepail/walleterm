@@ -8,7 +8,7 @@ import {
   sendAndPollTransaction,
   simulateGetter,
 } from "./rpc.js";
-import { resolveStoredChannel, upsertStoredChannel } from "./storage.js";
+import { applyMppChannelStateChange, assertMppChannelStateChangeAllowed } from "./storage.js";
 import type {
   MppChannelStatus,
   MppChannelStatusOptions,
@@ -18,13 +18,14 @@ import type {
   MppSettleChannelOptions,
   MppStartCloseChannelOptions,
   MppTopUpChannelOptions,
+  StoredMppChannel,
 } from "./types.js";
 
 export async function openMppChannel(opts: MppOpenChannelOptions): Promise<{
   channel_id: string;
   tx_hash: string;
   state_path: string;
-  stored_channel: ReturnType<typeof upsertStoredChannel>;
+  stored_channel: StoredMppChannel;
 }> {
   const server = new rpc.Server(opts.rpcUrl);
   const account = await server.getAccount(opts.keypair.publicKey());
@@ -59,21 +60,19 @@ export async function openMppChannel(opts: MppOpenChannelOptions): Promise<{
   }
   const channelId = Address.fromScVal(returnValue).toString();
 
-  const stored = upsertStoredChannel(opts.statePath, {
-    channel_id: channelId,
-    network_name: opts.networkName,
-    network_passphrase: opts.networkPassphrase,
-    source_account: opts.keypair.publicKey(),
-    secret_ref: opts.secretRef,
+  const stored = applyMppChannelStateChange(opts.statePath, {
+    type: "opened",
+    channelId,
+    networkName: opts.networkName,
+    networkPassphrase: opts.networkPassphrase,
+    sourceAccount: opts.keypair.publicKey(),
+    secretRef: opts.secretRef,
     deposit: opts.deposit.toString(),
-    cumulative_amount: "0",
-    refund_waiting_period: opts.refundWaitingPeriod,
-    factory_contract_id: opts.factoryContractId,
-    token_contract_id: opts.tokenContractId,
+    refundWaitingPeriod: opts.refundWaitingPeriod,
+    factoryContractId: opts.factoryContractId,
+    tokenContractId: opts.tokenContractId,
     recipient: opts.recipient,
-    lifecycle_state: "open",
-    opened_tx_hash: txHash,
-    updated_at: new Date().toISOString(),
+    txHash,
   });
 
   return {
@@ -89,8 +88,12 @@ export async function topUpMppChannel(opts: MppTopUpChannelOptions): Promise<{
   tx_hash: string;
   amount: string;
   state_path: string;
-  stored_channel: ReturnType<typeof upsertStoredChannel>;
+  stored_channel: StoredMppChannel;
 }> {
+  assertMppChannelStateChangeAllowed(opts.statePath, {
+    type: "topped-up",
+    channelId: opts.channelId,
+  });
   const server = new rpc.Server(opts.rpcUrl);
   const account = await server.getAccount(opts.keypair.publicKey());
   const contract = new Contract(opts.channelId);
@@ -105,32 +108,15 @@ export async function topUpMppChannel(opts: MppTopUpChannelOptions): Promise<{
   prepared.sign(opts.keypair);
   const txHash = await sendAndPollTransaction(server, prepared);
 
-  const existing = resolveStoredChannel(opts.statePath, opts.networkName, opts.channelId);
-  const nextDeposit = existing?.deposit
-    ? (BigInt(existing.deposit) + opts.amount).toString()
-    : undefined;
-  const stored = upsertStoredChannel(opts.statePath, {
-    channel_id: opts.channelId,
-    network_name: opts.networkName,
-    network_passphrase: opts.networkPassphrase,
-    source_account: opts.keypair.publicKey(),
-    secret_ref: opts.secretRef ?? existing?.secret_ref,
-    deposit: nextDeposit ?? opts.amount.toString(),
-    cumulative_amount: existing?.cumulative_amount ?? "0",
-    last_voucher_amount: existing?.last_voucher_amount,
-    last_voucher_signature: existing?.last_voucher_signature,
-    refund_waiting_period: existing?.refund_waiting_period,
-    factory_contract_id: existing?.factory_contract_id,
-    token_contract_id: existing?.token_contract_id,
-    recipient: existing?.recipient,
-    lifecycle_state: existing?.lifecycle_state ?? "open",
-    opened_tx_hash: existing?.opened_tx_hash,
-    last_topup_tx_hash: txHash,
-    last_settle_tx_hash: existing?.last_settle_tx_hash,
-    close_start_tx_hash: existing?.close_start_tx_hash,
-    close_tx_hash: existing?.close_tx_hash,
-    refund_tx_hash: existing?.refund_tx_hash,
-    updated_at: new Date().toISOString(),
+  const stored = applyMppChannelStateChange(opts.statePath, {
+    type: "topped-up",
+    channelId: opts.channelId,
+    networkName: opts.networkName,
+    networkPassphrase: opts.networkPassphrase,
+    sourceAccount: opts.keypair.publicKey(),
+    secretRef: opts.secretRef,
+    amount: opts.amount.toString(),
+    txHash,
   });
 
   return {
@@ -183,11 +169,16 @@ export async function closeMppChannel(opts: MppCloseChannelOptions): Promise<{
   tx_hash: string;
   amount: string;
   state_path: string;
-  stored_channel: ReturnType<typeof upsertStoredChannel>;
+  stored_channel: StoredMppChannel;
 }> {
   if (!/^[0-9a-f]{128}$/i.test(opts.signatureHex)) {
     throw new Error("signature must be a 64-byte hex string");
   }
+  assertMppChannelStateChangeAllowed(opts.statePath, {
+    type: "closed",
+    channelId: opts.channelId,
+    cumulativeAmount: opts.amount.toString(),
+  });
   const txHash = await closeChannelOnChain({
     channel: opts.channelId,
     amount: opts.amount,
@@ -197,34 +188,15 @@ export async function closeMppChannel(opts: MppCloseChannelOptions): Promise<{
     rpcUrl: opts.rpcUrl,
   });
 
-  const existing = resolveStoredChannel(opts.statePath, "", opts.channelId);
-  const stored = upsertStoredChannel(
-    opts.statePath,
-    {
-      channel_id: opts.channelId,
-      network_name: existing?.network_name ?? "",
-      network_passphrase: existing?.network_passphrase ?? opts.networkPassphrase,
-      source_account: existing?.source_account ?? opts.keypair.publicKey(),
-      secret_ref: existing?.secret_ref,
-      deposit: existing?.deposit,
-      cumulative_amount: opts.amount.toString(),
-      last_voucher_amount: opts.amount.toString(),
-      last_voucher_signature: opts.signatureHex,
-      refund_waiting_period: existing?.refund_waiting_period,
-      factory_contract_id: existing?.factory_contract_id,
-      token_contract_id: existing?.token_contract_id,
-      recipient: existing?.recipient,
-      lifecycle_state: "closed",
-      opened_tx_hash: existing?.opened_tx_hash,
-      last_topup_tx_hash: existing?.last_topup_tx_hash,
-      last_settle_tx_hash: existing?.last_settle_tx_hash,
-      close_start_tx_hash: existing?.close_start_tx_hash,
-      close_tx_hash: txHash,
-      refund_tx_hash: existing?.refund_tx_hash,
-      updated_at: new Date().toISOString(),
-    },
-    { makeActive: false, clearActive: true },
-  );
+  const stored = applyMppChannelStateChange(opts.statePath, {
+    type: "closed",
+    channelId: opts.channelId,
+    networkPassphrase: opts.networkPassphrase,
+    sourceAccount: opts.keypair.publicKey(),
+    cumulativeAmount: opts.amount.toString(),
+    signatureHex: opts.signatureHex,
+    txHash,
+  });
 
   return {
     channel_id: opts.channelId,
@@ -240,11 +212,16 @@ export async function settleMppChannel(opts: MppSettleChannelOptions): Promise<{
   tx_hash: string;
   amount: string;
   state_path: string;
-  stored_channel: ReturnType<typeof upsertStoredChannel>;
+  stored_channel: StoredMppChannel;
 }> {
   if (!/^[0-9a-f]{128}$/i.test(opts.signatureHex)) {
     throw new Error("signature must be a 64-byte hex string");
   }
+  assertMppChannelStateChangeAllowed(opts.statePath, {
+    type: "settled",
+    channelId: opts.channelId,
+    cumulativeAmount: opts.amount.toString(),
+  });
 
   const server = new rpc.Server(opts.rpcUrl);
   const account = await server.getAccount(opts.keypair.publicKey());
@@ -266,29 +243,14 @@ export async function settleMppChannel(opts: MppSettleChannelOptions): Promise<{
   prepared.sign(opts.keypair);
   const txHash = await sendAndPollTransaction(server, prepared);
 
-  const existing = resolveStoredChannel(opts.statePath, "", opts.channelId);
-  const stored = upsertStoredChannel(opts.statePath, {
-    channel_id: opts.channelId,
-    network_name: existing?.network_name ?? opts.networkName,
-    network_passphrase: existing?.network_passphrase ?? opts.networkPassphrase,
-    source_account: existing?.source_account ?? "",
-    secret_ref: existing?.secret_ref,
-    deposit: existing?.deposit,
-    cumulative_amount: opts.amount.toString(),
-    last_voucher_amount: opts.amount.toString(),
-    last_voucher_signature: opts.signatureHex,
-    refund_waiting_period: existing?.refund_waiting_period,
-    factory_contract_id: existing?.factory_contract_id,
-    token_contract_id: existing?.token_contract_id,
-    recipient: existing?.recipient,
-    lifecycle_state: existing?.lifecycle_state ?? "open",
-    opened_tx_hash: existing?.opened_tx_hash,
-    last_topup_tx_hash: existing?.last_topup_tx_hash,
-    last_settle_tx_hash: txHash,
-    close_start_tx_hash: existing?.close_start_tx_hash,
-    close_tx_hash: existing?.close_tx_hash,
-    refund_tx_hash: existing?.refund_tx_hash,
-    updated_at: new Date().toISOString(),
+  const stored = applyMppChannelStateChange(opts.statePath, {
+    type: "settled",
+    channelId: opts.channelId,
+    networkName: opts.networkName,
+    networkPassphrase: opts.networkPassphrase,
+    cumulativeAmount: opts.amount.toString(),
+    signatureHex: opts.signatureHex,
+    txHash,
   });
 
   return {
@@ -304,8 +266,12 @@ export async function startMppChannelClose(opts: MppStartCloseChannelOptions): P
   channel_id: string;
   tx_hash: string;
   state_path: string;
-  stored_channel: ReturnType<typeof upsertStoredChannel>;
+  stored_channel: StoredMppChannel;
 }> {
+  assertMppChannelStateChangeAllowed(opts.statePath, {
+    type: "close-started",
+    channelId: opts.channelId,
+  });
   const server = new rpc.Server(opts.rpcUrl);
   const account = await server.getAccount(opts.keypair.publicKey());
   const contract = new Contract(opts.channelId);
@@ -320,29 +286,13 @@ export async function startMppChannelClose(opts: MppStartCloseChannelOptions): P
   prepared.sign(opts.keypair);
   const txHash = await sendAndPollTransaction(server, prepared);
 
-  const existing = resolveStoredChannel(opts.statePath, "", opts.channelId);
-  const stored = upsertStoredChannel(opts.statePath, {
-    channel_id: opts.channelId,
-    network_name: existing?.network_name ?? opts.networkName,
-    network_passphrase: existing?.network_passphrase ?? opts.networkPassphrase,
-    source_account: existing?.source_account ?? opts.keypair.publicKey(),
-    secret_ref: existing?.secret_ref,
-    deposit: existing?.deposit,
-    cumulative_amount: existing?.cumulative_amount,
-    last_voucher_amount: existing?.last_voucher_amount,
-    last_voucher_signature: existing?.last_voucher_signature,
-    refund_waiting_period: existing?.refund_waiting_period,
-    factory_contract_id: existing?.factory_contract_id,
-    token_contract_id: existing?.token_contract_id,
-    recipient: existing?.recipient,
-    lifecycle_state: "closing",
-    opened_tx_hash: existing?.opened_tx_hash,
-    last_topup_tx_hash: existing?.last_topup_tx_hash,
-    last_settle_tx_hash: existing?.last_settle_tx_hash,
-    close_start_tx_hash: txHash,
-    close_tx_hash: existing?.close_tx_hash,
-    refund_tx_hash: existing?.refund_tx_hash,
-    updated_at: new Date().toISOString(),
+  const stored = applyMppChannelStateChange(opts.statePath, {
+    type: "close-started",
+    channelId: opts.channelId,
+    networkName: opts.networkName,
+    networkPassphrase: opts.networkPassphrase,
+    sourceAccount: opts.keypair.publicKey(),
+    txHash,
   });
 
   return {
@@ -357,8 +307,12 @@ export async function refundMppChannel(opts: MppRefundChannelOptions): Promise<{
   channel_id: string;
   tx_hash: string;
   state_path: string;
-  stored_channel: ReturnType<typeof upsertStoredChannel>;
+  stored_channel: StoredMppChannel;
 }> {
+  assertMppChannelStateChangeAllowed(opts.statePath, {
+    type: "refunded",
+    channelId: opts.channelId,
+  });
   const server = new rpc.Server(opts.rpcUrl);
   const account = await server.getAccount(opts.keypair.publicKey());
   const contract = new Contract(opts.channelId);
@@ -373,34 +327,14 @@ export async function refundMppChannel(opts: MppRefundChannelOptions): Promise<{
   prepared.sign(opts.keypair);
   const txHash = await sendAndPollTransaction(server, prepared);
 
-  const existing = resolveStoredChannel(opts.statePath, "", opts.channelId);
-  const stored = upsertStoredChannel(
-    opts.statePath,
-    {
-      channel_id: opts.channelId,
-      network_name: existing?.network_name ?? opts.networkName,
-      network_passphrase: existing?.network_passphrase ?? opts.networkPassphrase,
-      source_account: existing?.source_account ?? opts.keypair.publicKey(),
-      secret_ref: existing?.secret_ref,
-      deposit: existing?.deposit,
-      cumulative_amount: existing?.cumulative_amount,
-      last_voucher_amount: existing?.last_voucher_amount,
-      last_voucher_signature: existing?.last_voucher_signature,
-      refund_waiting_period: existing?.refund_waiting_period,
-      factory_contract_id: existing?.factory_contract_id,
-      token_contract_id: existing?.token_contract_id,
-      recipient: existing?.recipient,
-      lifecycle_state: "refunded",
-      opened_tx_hash: existing?.opened_tx_hash,
-      last_topup_tx_hash: existing?.last_topup_tx_hash,
-      last_settle_tx_hash: existing?.last_settle_tx_hash,
-      close_start_tx_hash: existing?.close_start_tx_hash,
-      close_tx_hash: existing?.close_tx_hash,
-      refund_tx_hash: txHash,
-      updated_at: new Date().toISOString(),
-    },
-    { makeActive: false, clearActive: true },
-  );
+  const stored = applyMppChannelStateChange(opts.statePath, {
+    type: "refunded",
+    channelId: opts.channelId,
+    networkName: opts.networkName,
+    networkPassphrase: opts.networkPassphrase,
+    sourceAccount: opts.keypair.publicKey(),
+    txHash,
+  });
 
   return {
     channel_id: opts.channelId,

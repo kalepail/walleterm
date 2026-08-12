@@ -1,19 +1,14 @@
-import { Address, rpc, xdr } from "@stellar/stellar-sdk";
+import { rpc, xdr } from "@stellar/stellar-sdk";
 import type { NetworkConfig } from "../config.js";
-import { selectAccountForAddress } from "./accounts.js";
+import { analyzeAuthEntry, type AuthEntryAnalysis } from "./auth-entry.js";
 import {
-  appendMissingSmartAccountEntries,
   authorizationPayload,
   createDelegatedAuthEntry,
-  decodeSignerKey,
-  ensureSignatureMap,
   makeAddressSignatureScVal,
   sortMapEntries,
-  withExpiration,
 } from "./smart-account.js";
 import { signEnvelopeSignatures, getEnvelopeOperations } from "./transactions.js";
-import { compositeExternalKey } from "./runtime-signers.js";
-import type { AccountRef, ParsedInput, SignContext, SignReport } from "./types.js";
+import type { ParsedInput, SignContext, SignReport } from "./types.js";
 
 function createReport(kind: string): SignReport {
   return {
@@ -47,75 +42,74 @@ async function signGenericAddressEntry(
 }
 
 async function signSmartAccountEntry(
-  entry: xdr.SorobanAuthorizationEntry,
-  accountRef: AccountRef,
-  runtimeSigners: SignContext["runtimeSigners"],
+  analysis: Extract<AuthEntryAnalysis, { kind: "smartAccount" }>,
   report: SignReport,
   networkPassphrase: string,
 ): Promise<xdr.SorobanAuthorizationEntry[]> {
-  const payload = authorizationPayload(entry, networkPassphrase);
-  const creds = entry.credentials().address();
-  const sigMap = ensureSignatureMap(creds);
-
-  if (sigMap.length === 0) {
-    appendMissingSmartAccountEntries(sigMap, runtimeSigners);
-  }
+  const payload = authorizationPayload(analysis.entry, networkPassphrase);
+  const creds = analysis.entry.credentials().address();
 
   const delegatedToExpand = new Map<string, SignContext["runtimeSigners"]["delegated"][number]>();
 
-  for (const item of sigMap) {
-    const decoded = decodeSignerKey(item.key());
-    if (!decoded) {
-      reportSkipped(report, `auth:${accountRef.alias}`, "unrecognized signer key in signature map");
+  for (const signerAnalysis of analysis.signers) {
+    if (signerAnalysis.kind === "unknown") {
+      reportSkipped(
+        report,
+        `auth:${analysis.accountRef.alias}`,
+        "unrecognized signer key in signature map",
+      );
       continue;
     }
 
-    if (decoded.type === "external") {
-      const composite = compositeExternalKey(decoded.verifierContractId, decoded.publicKeyHex);
-      const signer = runtimeSigners.externalByComposite.get(composite);
+    if (signerAnalysis.kind === "external") {
+      const signer = signerAnalysis.signer;
       if (!signer) {
         reportSkipped(
           report,
-          `auth:${accountRef.alias}`,
-          `no local key for external signer ${decoded.verifierContractId}:${decoded.publicKeyHex}`,
+          `auth:${analysis.accountRef.alias}`,
+          `no local key for external signer ${signerAnalysis.verifierContractId}:${signerAnalysis.publicKeyHex}`,
         );
         continue;
       }
 
       const signature = await signer.signer.sign(payload);
-      item.val(xdr.ScVal.scvBytes(signature));
-      reportSigned(report, `auth:${accountRef.alias}`, `signed external signer ${signer.name}`);
-      continue;
-    }
-
-    const delegated = runtimeSigners.delegatedByAddress.get(decoded.address);
-    if (!delegated) {
-      reportSkipped(
+      signerAnalysis.mapEntry.val(xdr.ScVal.scvBytes(signature));
+      reportSigned(
         report,
-        `auth:${accountRef.alias}`,
-        `no local key for delegated signer ${decoded.address}`,
+        `auth:${analysis.accountRef.alias}`,
+        `signed external signer ${signer.name}`,
       );
       continue;
     }
 
-    item.val(xdr.ScVal.scvBytes(Buffer.alloc(0)));
+    const delegated = signerAnalysis.signer;
+    if (!delegated) {
+      reportSkipped(
+        report,
+        `auth:${analysis.accountRef.alias}`,
+        `no local key for delegated signer ${signerAnalysis.address}`,
+      );
+      continue;
+    }
+
+    signerAnalysis.mapEntry.val(xdr.ScVal.scvBytes(Buffer.alloc(0)));
     delegatedToExpand.set(delegated.address, delegated);
     reportSigned(
       report,
-      `auth:${accountRef.alias}`,
+      `auth:${analysis.accountRef.alias}`,
       `added delegated marker for ${delegated.name}`,
     );
   }
 
-  sortMapEntries(sigMap);
-  creds.signature(xdr.ScVal.scvVec([xdr.ScVal.scvMap(sigMap)]));
+  sortMapEntries(analysis.signatureMap);
+  creds.signature(xdr.ScVal.scvVec([xdr.ScVal.scvMap(analysis.signatureMap)]));
 
-  const extraEntries: xdr.SorobanAuthorizationEntry[] = [entry];
+  const extraEntries: xdr.SorobanAuthorizationEntry[] = [analysis.entry];
 
   for (const delegated of delegatedToExpand.values()) {
     extraEntries.push(
       await createDelegatedAuthEntry(
-        accountRef.account.contract_id,
+        analysis.accountRef.account.contract_id,
         delegated,
         payload,
         creds.signatureExpirationLedger(),
@@ -124,7 +118,7 @@ async function signSmartAccountEntry(
     );
     reportSigned(
       report,
-      `auth:${accountRef.alias}`,
+      `auth:${analysis.accountRef.alias}`,
       `generated delegated auth entry for ${delegated.name}`,
     );
   }
@@ -137,53 +131,29 @@ async function signOneAuthEntry(
   context: SignContext,
   report: SignReport,
 ): Promise<xdr.SorobanAuthorizationEntry[]> {
-  if (entry.credentials().switch().name !== "sorobanCredentialsAddress") {
-    reportSkipped(report, "auth", "unsupported credential type");
-    return [entry];
+  const analysis = analyzeAuthEntry(entry, context);
+
+  if (analysis.kind === "invalidSmartAccountSignature") {
+    throw analysis.error;
   }
 
-  const addressCreds = entry.credentials().address();
-  const authAddress = Address.fromScAddress(addressCreds.address()).toString();
-
-  if (authAddress.startsWith("G")) {
-    const signer = context.runtimeSigners.byAddress.get(authAddress);
-    if (!signer) {
-      reportSkipped(report, `auth:${authAddress}`, "no local key for address");
-      return [entry];
-    }
-
-    return [
-      await signGenericAddressEntry(entry, signer, report, context.network.network_passphrase),
-    ];
+  if (analysis.kind === "smartAccount") {
+    return signSmartAccountEntry(analysis, report, context.network.network_passphrase);
   }
 
-  if (authAddress.startsWith("C")) {
-    const accountRef = selectAccountForAddress(
-      context.config,
-      context.networkName,
-      context.accountRef,
-      authAddress,
-    );
-    if (!accountRef) {
-      reportSkipped(
-        report,
-        `auth:${authAddress}`,
-        "no matching smart account config for contract address",
-      );
-      return [entry];
-    }
+  if (analysis.signing.action === "skip") {
+    reportSkipped(report, analysis.signing.target, analysis.signing.reason);
+    return [analysis.entry];
+  }
 
-    return signSmartAccountEntry(
-      entry,
-      accountRef,
-      context.runtimeSigners,
+  return [
+    await signGenericAddressEntry(
+      analysis.entry,
+      analysis.signing.signer,
       report,
       context.network.network_passphrase,
-    );
-  }
-
-  reportSkipped(report, `auth:${authAddress}`, "unsupported address format");
-  return [entry];
+    ),
+  ];
 }
 
 async function signAuthList(
@@ -194,8 +164,7 @@ async function signAuthList(
   const signed: xdr.SorobanAuthorizationEntry[] = [];
 
   for (const entry of entries) {
-    const withTtl = withExpiration(entry, context.expirationLedger);
-    const out = await signOneAuthEntry(withTtl, context, report);
+    const out = await signOneAuthEntry(entry, context, report);
     signed.push(...out);
   }
 

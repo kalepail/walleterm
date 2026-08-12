@@ -6,6 +6,7 @@ import {
   STELLAR_TESTNET_CAIP2,
   type ClientStellarSigner,
 } from "@x402/stellar";
+import { enforcePaymentAmount } from "./payment-amount-policy.js";
 export type { ClientStellarSigner } from "@x402/stellar";
 
 const PASSPHRASE_TO_X402_NETWORK = new Map<string, Network>([
@@ -133,16 +134,15 @@ export async function executeX402Request(
 
   const accepted = stellarAccepts[0]!;
 
-  if (opts.maxPaymentAmount && !opts.yes) {
-    const amount = Number(accepted.amount);
-    const max = Number(opts.maxPaymentAmount);
-    /* v8 ignore next -- config validation already guarantees numeric max_payment_amount */
-    if (amount > max) {
-      throw new Error(
-        `Payment amount ${accepted.amount} exceeds configured max_payment_amount ${opts.maxPaymentAmount}. Use --yes to override.`,
-      );
-    }
-  }
+  enforcePaymentAmount({
+    amount: accepted.amount,
+    amountLabel: "Payment amount",
+    grammar: "integer",
+    maximum: opts.maxPaymentAmount,
+    maximumGrammar: "decimal",
+    maximumLabel: "max_payment_amount",
+    allowAboveMaximum: opts.yes,
+  });
 
   process.stderr.write(
     `x402: paying ${accepted.amount} via ${accepted.scheme} on ${accepted.network} to ${accepted.payTo}\n`,

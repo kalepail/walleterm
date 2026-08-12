@@ -1,10 +1,10 @@
 import { Command } from "commander";
 import { Keypair, xdr } from "@stellar/stellar-sdk";
-import { parseInputFile, writeOutput } from "../core.js";
+import { writeOutput } from "../core.js";
 import { loadConfig, resolveAccount, resolveNetwork, type WalletermConfig } from "../config.js";
 import { SecretResolver } from "../secrets.js";
 import { KeypairSigner } from "../signer.js";
-import { submitTxXdrViaRpc, submitViaChannels, type SubmitNetworkOverrides } from "../submit.js";
+import { submitConfiguredInput } from "../submit.js";
 import {
   createWalletDeployTx,
   deriveSaltHexFromRawString,
@@ -29,7 +29,7 @@ interface WalletCreateOpts {
   fee?: string;
   skipPrepare?: boolean;
   submit?: boolean;
-  submitMode?: "channels" | "rpc";
+  submitMode?: string;
   channelsBaseUrl?: string;
   channelsApiKey?: string;
   channelsApiKeyRef?: string;
@@ -165,27 +165,20 @@ export function registerWalletCreateCommand(wallet: Command): void {
 
         writeOutput(opts.out, txXdr);
 
-        let submission: unknown;
-        const shouldSubmit = Boolean(opts.submit) || config.app.default_submit_mode === "channels";
-        if (shouldSubmit) {
-          const mode = opts.submitMode ?? "channels";
-          if (mode === "rpc") {
-            const rpcResult = await submitTxXdrViaRpc(txXdr, network);
-            submission = {
-              mode: "rpc",
-              request_kind: "tx",
-              ...rpcResult,
-            };
-          } else {
-            const parsed = parseInputFile(opts.out);
-            submission = await submitViaChannels(parsed, network, resolver, {
-              channelsBaseUrl: opts.channelsBaseUrl,
-              channelsApiKey: opts.channelsApiKey,
-              channelsApiKeyRef: opts.channelsApiKeyRef,
-              pluginId: opts.pluginId,
-            } satisfies SubmitNetworkOverrides);
-          }
-        }
+        const submission = await submitConfiguredInput({
+          config,
+          network: networkName,
+          input: { kind: "signed-tx", xdr: txXdr },
+          mode: opts.submitMode,
+          trigger: opts.submit ? "always" : "configured",
+          channels: {
+            channelsBaseUrl: opts.channelsBaseUrl,
+            channelsApiKey: opts.channelsApiKey,
+            channelsApiKeyRef: opts.channelsApiKeyRef,
+            pluginId: opts.pluginId,
+          },
+        });
+        const submitted = submission !== null;
 
         process.stdout.write(
           `${JSON.stringify({
@@ -200,8 +193,8 @@ export function registerWalletCreateCommand(wallet: Command): void {
             deterministic_input: usingKitDeterministic ? opts.kitRawId : undefined,
             signers_count: signers.length,
             prepared: !opts.skipPrepare,
-            submitted: shouldSubmit,
-            submission,
+            submitted,
+            submission: submission ?? undefined,
           })}\n`,
         );
       } finally {

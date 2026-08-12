@@ -10,12 +10,11 @@ import {
 } from "@stellar/stellar-sdk";
 import { ChannelsClient } from "@openzeppelin/relayer-plugin-channels";
 import type { ChannelsTransactionResponse } from "@openzeppelin/relayer-plugin-channels";
+import type { NetworkConfig, WalletermConfig } from "../../src/config.js";
 import { SecretResolver } from "../../src/secrets.js";
-import { submitTxXdrViaRpc, submitViaChannels } from "../../src/submit.js";
+import { submitConfiguredInput } from "../../src/submit.js";
 
 const TX_INPUT = { kind: "tx", envelope: { toXDR: () => "AAAA" } } as const;
-const TX_INPUT_B = { kind: "tx", envelope: { toXDR: () => "BBBB" } } as const;
-const TX_INPUT_C = { kind: "tx", envelope: { toXDR: () => "CCCC" } } as const;
 const BUNDLE_WITHOUT_FUNC = { kind: "bundle", func: undefined, auth: [] } as const;
 const BUNDLE_WITH_FUNC = {
   kind: "bundle",
@@ -24,125 +23,52 @@ const BUNDLE_WITH_FUNC = {
 } as const;
 const AUTH_INPUT = { kind: "auth", auth: [{ toXDR: () => "AUTH1" }] } as const;
 
-describe("submit unit", () => {
+function makeConfig(
+  defaultSubmitMode = "sign-only",
+  network: Partial<NetworkConfig> = {},
+): WalletermConfig {
+  return {
+    app: {
+      default_network: "testnet",
+      default_submit_mode: defaultSubmitMode,
+    },
+    networks: {
+      testnet: {
+        rpc_url: "https://rpc.invalid",
+        network_passphrase: Networks.TESTNET,
+        channels_base_url: "https://channels.example",
+        ...network,
+      },
+    },
+    smart_accounts: {},
+  };
+}
+
+describe("configured submission interface", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("requires channels base URL", async () => {
-    await expect(
-      submitViaChannels(
-        TX_INPUT as any,
-        { rpc_url: "https://rpc.invalid", network_passphrase: Networks.TESTNET },
-        new SecretResolver("op"),
-        {},
-      ),
-    ).rejects.toThrow(/Channels base URL is required/i);
+  it("keeps configured submission disabled in sign-only mode", async () => {
+    const channelsSpy = vi.spyOn(ChannelsClient.prototype, "submitTransaction");
+    const rpcSpy = vi.spyOn(rpc.Server.prototype, "sendTransaction");
+
+    const result = await submitConfiguredInput({
+      config: makeConfig(),
+      input: TX_INPUT as any,
+      trigger: "configured",
+      channels: { channelsApiKey: "key" },
+    });
+
+    expect(result).toBeNull();
+    expect(channelsSpy).not.toHaveBeenCalled();
+    expect(rpcSpy).not.toHaveBeenCalled();
   });
 
-  it("requires channels API key", async () => {
-    await expect(
-      submitViaChannels(
-        TX_INPUT as any,
-        {
-          rpc_url: "https://rpc.invalid",
-          network_passphrase: Networks.TESTNET,
-          channels_base_url: "https://channels.example",
-        },
-        new SecretResolver("op"),
-        {},
-      ),
-    ).rejects.toThrow(/Channels API key is required/i);
-  });
-
-  it("supports non-op channelsApiKeyRef and pluginId", async () => {
-    const submitTxSpy = vi.spyOn(ChannelsClient.prototype, "submitTransaction").mockResolvedValue({
-      hash: "tx-hash",
-      status: "pending",
-      transactionId: "tx-id",
-    } satisfies ChannelsTransactionResponse);
-
-    const result = await submitViaChannels(
-      TX_INPUT as any,
-      {
-        rpc_url: "https://rpc.invalid",
-        network_passphrase: Networks.TESTNET,
-        channels_base_url: "https://channels.example",
-      },
-      new SecretResolver("op"),
-      {
-        channelsApiKeyRef: "direct-api-key",
-        pluginId: "plugin-1",
-      },
-    );
-
-    expect(result.mode).toBe("channels");
-    expect(result.request_kind).toBe("tx");
-    expect(submitTxSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("resolves supported secret refs from override and network config", async () => {
-    vi.spyOn(ChannelsClient.prototype, "submitTransaction").mockResolvedValue({
-      hash: "tx-hash",
-      status: "confirmed",
-      transactionId: "tx-id",
-    } satisfies ChannelsTransactionResponse);
-    const resolver = new SecretResolver("op");
-    const resolveSpy = vi.spyOn(resolver, "resolve").mockResolvedValue("resolved-key");
-
-    await submitViaChannels(
-      TX_INPUT as any,
-      {
-        rpc_url: "https://rpc.invalid",
-        network_passphrase: Networks.TESTNET,
-        channels_base_url: "https://channels.example",
-      },
-      resolver,
-      { channelsApiKeyRef: "op://vault/item/key" },
-    );
-    expect(resolveSpy).toHaveBeenCalledWith("op://vault/item/key");
-
-    await submitViaChannels(
-      TX_INPUT_B as any,
-      {
-        rpc_url: "https://rpc.invalid",
-        network_passphrase: Networks.TESTNET,
-        channels_base_url: "https://channels.example",
-        channels_api_key_ref: "op://vault/item/network_key",
-      },
-      resolver,
-      {},
-    );
-    expect(resolveSpy).toHaveBeenCalledWith("op://vault/item/network_key");
-
-    await submitViaChannels(
-      TX_INPUT_C as any,
-      {
-        rpc_url: "https://rpc.invalid",
-        network_passphrase: Networks.TESTNET,
-        channels_base_url: "https://channels.example",
-      },
-      resolver,
-      { channelsApiKeyRef: "keychain://walleterm-testnet/channels_api_key" },
-    );
-    expect(resolveSpy).toHaveBeenCalledWith("keychain://walleterm-testnet/channels_api_key");
-  });
-
-  it("handles bundle and auth submission validation", async () => {
-    await expect(
-      submitViaChannels(
-        BUNDLE_WITHOUT_FUNC as any,
-        {
-          rpc_url: "https://rpc.invalid",
-          network_passphrase: Networks.TESTNET,
-          channels_base_url: "https://channels.example",
-        },
-        new SecretResolver("op"),
-        { channelsApiKey: "k" },
-      ),
-    ).rejects.toThrow(/requires 'func'/i);
-
-    const submitBundleSpy = vi
+  it("applies the configured trigger and normalizes a channels bundle result", async () => {
+    const resolveSpy = vi.spyOn(SecretResolver.prototype, "resolve").mockResolvedValue("key");
+    const clearSpy = vi.spyOn(SecretResolver.prototype, "clearCache");
+    const submitSpy = vi
       .spyOn(ChannelsClient.prototype, "submitSorobanTransaction")
       .mockResolvedValue({
         hash: "bundle-hash",
@@ -150,49 +76,115 @@ describe("submit unit", () => {
         transactionId: "bundle-id",
       } satisfies ChannelsTransactionResponse);
 
-    const bundleResult = await submitViaChannels(
-      BUNDLE_WITH_FUNC as any,
-      {
-        rpc_url: "https://rpc.invalid",
-        network_passphrase: Networks.TESTNET,
-        channels_base_url: "https://channels.example",
+    const result = await submitConfiguredInput({
+      config: makeConfig("channels", {
+        channels_api_key_ref: "op://vault/item/network_key",
+      }),
+      input: BUNDLE_WITH_FUNC as any,
+      trigger: "configured",
+    });
+
+    expect(resolveSpy).toHaveBeenCalledWith("op://vault/item/network_key");
+    expect(submitSpy).toHaveBeenCalledWith({ func: "AAAA", auth: ["AUTH1", "AUTH2"] });
+    expect(clearSpy).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      mode: "channels",
+      request_kind: "bundle",
+      hash: "bundle-hash",
+      status: "pending",
+      transaction_id: "bundle-id",
+    });
+  });
+
+  it("defaults to channels and applies direct overrides", async () => {
+    const submitSpy = vi.spyOn(ChannelsClient.prototype, "submitTransaction").mockResolvedValue({
+      hash: "tx-hash",
+      status: "confirmed",
+      transactionId: "tx-id",
+    } satisfies ChannelsTransactionResponse);
+
+    const result = await submitConfiguredInput({
+      config: makeConfig(),
+      input: TX_INPUT as any,
+      channels: {
+        channelsBaseUrl: "https://override.example",
+        channelsApiKey: "direct-key",
+        pluginId: "plugin-1",
       },
-      new SecretResolver("op"),
-      { channelsApiKey: "k" },
-    );
-    expect(bundleResult.request_kind).toBe("bundle");
-    expect(submitBundleSpy).toHaveBeenCalledTimes(1);
+    });
 
-    await expect(
-      submitViaChannels(
-        AUTH_INPUT as any,
-        {
-          rpc_url: "https://rpc.invalid",
-          network_passphrase: Networks.TESTNET,
-          channels_base_url: "https://channels.example",
-        },
-        new SecretResolver("op"),
-        { channelsApiKey: "k" },
-      ),
-    ).rejects.toThrow(/standalone auth entry is not supported/i);
+    expect(submitSpy).toHaveBeenCalledWith({ xdr: "AAAA" });
+    expect(result).toMatchObject({ mode: "channels", request_kind: "tx" });
   });
 
-  it("readDirectOrSecretRef rejects unsupported secret ref scheme", async () => {
+  it("owns channels configuration errors and always clears credentials", async () => {
+    const clearSpy = vi.spyOn(SecretResolver.prototype, "clearCache");
+
     await expect(
-      submitViaChannels(
-        TX_INPUT as any,
-        {
-          rpc_url: "https://rpc.invalid",
-          network_passphrase: Networks.TESTNET,
-          channels_base_url: "https://channels.example",
-        },
-        new SecretResolver("op"),
-        { channelsApiKeyRef: "env://something" },
-      ),
+      submitConfiguredInput({
+        config: makeConfig("sign-only", { channels_base_url: undefined }),
+        input: TX_INPUT as any,
+        channels: { channelsApiKey: "key" },
+      }),
+    ).rejects.toThrow(/Channels base URL is required/i);
+
+    await expect(
+      submitConfiguredInput({ config: makeConfig(), input: TX_INPUT as any }),
+    ).rejects.toThrow(/Channels API key is required/i);
+
+    await expect(
+      submitConfiguredInput({
+        config: makeConfig(),
+        input: TX_INPUT as any,
+        channels: { channelsApiKeyRef: "env://something" },
+      }),
     ).rejects.toThrow(/Unsupported secret ref 'env:\/\/something'/);
+
+    expect(clearSpy).toHaveBeenCalledTimes(3);
   });
 
-  it("submits signed tx xdr directly to rpc", async () => {
+  it("clears credentials when the channels adapter fails", async () => {
+    vi.spyOn(ChannelsClient.prototype, "submitTransaction").mockRejectedValue(
+      new Error("channels failed"),
+    );
+    const clearSpy = vi.spyOn(SecretResolver.prototype, "clearCache");
+
+    await expect(
+      submitConfiguredInput({
+        config: makeConfig(),
+        input: TX_INPUT as any,
+        channels: { channelsApiKey: "key" },
+      }),
+    ).rejects.toThrow(/channels failed/i);
+    expect(clearSpy).toHaveBeenCalledOnce();
+  });
+
+  it("enforces mode and input limits", async () => {
+    const config = makeConfig();
+
+    await expect(
+      submitConfiguredInput({ config, input: BUNDLE_WITH_FUNC as any, mode: "rpc" }),
+    ).rejects.toThrow(/RPC submission currently supports signed tx envelope input only/i);
+    await expect(
+      submitConfiguredInput({
+        config,
+        input: BUNDLE_WITHOUT_FUNC as any,
+        channels: { channelsApiKey: "key" },
+      }),
+    ).rejects.toThrow(/requires 'func'/i);
+    await expect(
+      submitConfiguredInput({
+        config,
+        input: AUTH_INPUT as any,
+        channels: { channelsApiKey: "key" },
+      }),
+    ).rejects.toThrow(/standalone auth entry is not supported/i);
+    await expect(
+      submitConfiguredInput({ config, input: TX_INPUT as any, mode: "other" }),
+    ).rejects.toThrow(/Unsupported submit mode 'other'/i);
+  });
+
+  it("normalizes direct rpc submission", async () => {
     const source = Keypair.random();
     const contract = StrKey.encodeContract(Buffer.alloc(32, 11));
     const tx = new TransactionBuilder(new Account(source.publicKey(), "1"), {
@@ -217,12 +209,15 @@ describe("submit unit", () => {
       latestLedgerCloseTime: 456,
     } as any);
 
-    const out = await submitTxXdrViaRpc(tx.toXDR(), {
-      rpc_url: "https://rpc.invalid",
-      network_passphrase: Networks.TESTNET,
+    const result = await submitConfiguredInput({
+      config: makeConfig(),
+      input: { kind: "signed-tx", xdr: tx.toXDR() },
+      mode: "rpc",
     });
 
-    expect(out).toEqual({
+    expect(result).toEqual({
+      mode: "rpc",
+      request_kind: "tx",
       status: "SUCCESS",
       hash: "rpc-hash",
       latestLedger: 123,

@@ -5,9 +5,8 @@ import {
   signConfiguredInput,
   writeOutput,
 } from "../core.js";
-import { loadConfig, resolveNetwork } from "../config.js";
-import { SecretResolver } from "../secrets.js";
-import { submitTxXdrViaRpc, submitViaChannels, type SubmitNetworkOverrides } from "../submit.js";
+import { loadConfig } from "../config.js";
+import { submitConfiguredInput } from "../submit.js";
 import { parseOptionalInt } from "./shared.js";
 
 interface BaseOpts {
@@ -27,7 +26,7 @@ interface SignOpts extends InputOpts {
 }
 
 interface SubmitOpts extends InputOpts {
-  mode: "channels" | "rpc";
+  mode: string;
   channelsBaseUrl?: string;
   channelsApiKey?: string;
   channelsApiKeyRef?: string;
@@ -92,34 +91,18 @@ export function registerSigningCommands(program: Command): void {
     .action(async (opts: SubmitOpts) => {
       const config = loadConfig(opts.config);
       const parsed = parseInputFile(opts.in);
-      const { config: network } = resolveNetwork(config, opts.network);
-
-      if (opts.mode === "rpc") {
-        if (parsed.kind !== "tx") {
-          throw new Error("RPC submission currently supports signed tx envelope input only.");
-        }
-        const rpcResult = await submitTxXdrViaRpc(parsed.envelope.toXDR("base64"), network);
-        process.stdout.write(
-          `${JSON.stringify({
-            mode: "rpc",
-            request_kind: "tx",
-            ...rpcResult,
-          })}\n`,
-        );
-        return;
-      }
-
-      const resolver = new SecretResolver();
-      try {
-        const result = await submitViaChannels(parsed, network, resolver, {
+      const result = await submitConfiguredInput({
+        config,
+        input: parsed,
+        network: opts.network,
+        mode: opts.mode,
+        channels: {
           channelsBaseUrl: opts.channelsBaseUrl,
           channelsApiKey: opts.channelsApiKey,
           channelsApiKeyRef: opts.channelsApiKeyRef,
           pluginId: opts.pluginId,
-        } satisfies SubmitNetworkOverrides);
-        process.stdout.write(`${JSON.stringify(result)}\n`);
-      } finally {
-        resolver.clearCache();
-      }
+        },
+      });
+      process.stdout.write(`${JSON.stringify(result)}\n`);
     });
 }

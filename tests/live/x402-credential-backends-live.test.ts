@@ -22,7 +22,8 @@ import {
   X402_NFT_BASE_URL,
 } from "./helpers.js";
 import { buildSshAgentRef, listAgentIdentities, resolveSocketPath } from "../../src/ssh-agent.js";
-import { createSshAgentSigner } from "../../src/signer.js";
+import { SecretResolver } from "../../src/secrets.js";
+import { resolveSigner } from "../../src/signer.js";
 
 const BASE_ENABLED = process.env.WALLETERM_LIVE === "1" && process.env.WALLETERM_LIVE_X402 === "1";
 const OP_ENABLED = BASE_ENABLED && process.env.WALLETERM_LIVE_OP === "1";
@@ -106,8 +107,7 @@ async function ensureUsdcForSshAgentKey(
     (balance) => "asset_code" in balance && balance.asset_code === "USDC",
   );
 
-  const signer = await createSshAgentSigner(secretRef);
-
+  const signer = await resolveSigner(secretRef, new SecretResolver());
   if (!hasTrustline) {
     const trustlineTx = new TransactionBuilder(account, {
       fee: BASE_FEE,

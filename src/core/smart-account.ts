@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { Address, hash, xdr } from "@stellar/stellar-sdk";
 import type { RuntimeDelegatedSigner, RuntimeSigners } from "./types.js";
-import { compositeExternalKey } from "./runtime-signers.js";
 
 export class UnsupportedSmartAccountSignatureShapeError extends Error {
   constructor() {
@@ -201,24 +200,4 @@ export function appendMissingSmartAccountEntries(
   }
 
   sortMapEntries(sigMap);
-}
-
-export function hasMatchingSignerInSignatureMap(
-  sigMap: xdr.ScMapEntry[],
-  runtimeSigners: RuntimeSigners,
-): { signable: boolean; reason: string } {
-  for (const item of sigMap) {
-    const decoded = decodeSignerKey(item.key());
-    if (!decoded) continue;
-    if (decoded.type === "external") {
-      const composite = compositeExternalKey(decoded.verifierContractId, decoded.publicKeyHex);
-      if (runtimeSigners.externalByComposite.has(composite)) {
-        return { signable: true, reason: "matching external signer key" };
-      }
-    } else if (runtimeSigners.delegatedByAddress.has(decoded.address)) {
-      return { signable: true, reason: "matching delegated signer key" };
-    }
-  }
-
-  return { signable: false, reason: "no matching signer key in smart-account signature map" };
 }

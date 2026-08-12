@@ -1,6 +1,7 @@
 import { Keypair } from "@stellar/stellar-sdk";
 import { loadConfig, resolveNetwork, type WalletermConfig } from "../config.js";
 import { SecretResolver } from "../secrets.js";
+import { requireKeypairSigner, resolveSigner } from "../signer.js";
 import {
   closeMppChannel,
   getMppChannelStatus,
@@ -97,13 +98,15 @@ async function withSigner<T>(
 ): Promise<T> {
   const resolver = new SecretResolver();
   try {
-    const secret = await resolver.resolve(secretRef);
-    let keypair: Keypair;
-    try {
-      keypair = Keypair.fromSecret(secret);
-    } catch {
-      throw new Error("MPP channel credential must resolve to a valid Stellar secret seed (S...)");
-    }
+    const signer = await resolveSigner(
+      secretRef,
+      resolver,
+      "MPP channel credential must resolve to a valid Stellar secret seed (S...)",
+    );
+    const keypair = requireKeypairSigner(
+      signer,
+      "MPP channel operations require a signer with secret-seed capability. The selected credential does not provide this capability.",
+    ).keypair();
     if (record && role) assertChannelRole(record, keypair, role);
     return await run(keypair);
   } finally {

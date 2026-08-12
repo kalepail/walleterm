@@ -356,6 +356,14 @@ max_payment_amount = "nope"
     expect(() => loadConfig(writeConfig(nanCfg))).toThrow(
       /payments\.x402\.max_payment_amount must be a valid non-negative/i,
     );
+
+    const scientificCfg = `${BASE_CONFIG}
+[payments.x402]
+max_payment_amount = "1e6"
+`;
+    expect(() => loadConfig(writeConfig(scientificCfg))).toThrow(
+      /payments\.x402\.max_payment_amount must be a valid non-negative/i,
+    );
   });
 
   it("accepts valid non-negative payments.x402.max_payment_amount values", () => {
@@ -484,6 +492,17 @@ max_payment_amount = "-1"
 `;
     expect(() => loadConfig(writeConfig(badMpp))).toThrow(/payments\.mpp\.max_payment_amount/i);
 
+    const scientificMpp = `${BASE_CONFIG}
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp]
+max_payment_amount = "1e6"
+`;
+    expect(() => loadConfig(writeConfig(scientificMpp))).toThrow(
+      /payments\.mpp\.max_payment_amount must be a valid non-negative/i,
+    );
+
     const badX402 = `${BASE_CONFIG}
 [payments]
 default_protocol = "x402"
@@ -553,6 +572,17 @@ default_protocol = "mpp"
 default_deposit = "-1"
 `;
     expect(() => loadConfig(writeConfig(badDeposit))).toThrow(
+      /payments\.mpp\.channel\.default_deposit/i,
+    );
+
+    const decimalDeposit = `${BASE_CONFIG}
+[payments]
+default_protocol = "mpp"
+
+[payments.mpp.channel]
+default_deposit = "1.5"
+`;
+    expect(() => loadConfig(writeConfig(decimalDeposit))).toThrow(
       /payments\.mpp\.channel\.default_deposit/i,
     );
 

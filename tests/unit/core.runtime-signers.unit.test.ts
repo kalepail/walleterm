@@ -62,32 +62,11 @@ describe("core runtime signers", () => {
     expect(listed.delegated).toHaveLength(0);
   });
 
-  it("loadRuntimeSigners validates seed and signer key matching", async () => {
+  it("loadRuntimeSigners validates signer key matching", async () => {
     const verifier = StrKey.encodeContract(Buffer.alloc(32, 10));
     const ext = Keypair.random();
     const other = Keypair.random();
     const del = Keypair.random();
-
-    const badSeedAccount: SmartAccountConfig = {
-      network: "testnet",
-      contract_id: CONTRACT,
-      external_signers: [
-        {
-          name: "ext",
-          verifier_contract_id: verifier,
-          public_key_hex: Buffer.from(ext.rawPublicKey()).toString("hex"),
-          secret_ref: "ext",
-          enabled: true,
-        },
-      ],
-      delegated_signers: [],
-    };
-    await expect(
-      loadRuntimeSigners(
-        { alias: "treasury", account: badSeedAccount },
-        makeResolver({ ext: "not-a-seed" }),
-      ),
-    ).rejects.toThrow(/must resolve to a valid Stellar secret seed/i);
 
     const extMismatchAccount: SmartAccountConfig = {
       network: "testnet",

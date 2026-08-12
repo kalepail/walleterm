@@ -3,17 +3,13 @@ import { Keypair, xdr } from "@stellar/stellar-sdk";
 import { signConfiguredInput, writeOutput } from "../core.js";
 import { loadConfig } from "../config.js";
 import { SecretResolver } from "../secrets.js";
+import { resolveSigner } from "../signer.js";
 import {
   buildSignerMutationBundle,
   makeDelegatedSignerScVal,
   makeExternalSignerScVal,
 } from "../wallet.js";
-import {
-  buildKeypairJson,
-  credentialIdFromKeypair,
-  parseOptionalInt,
-  requireNonNegativeInt,
-} from "./shared.js";
+import { buildKeypairJson, parseOptionalInt, requireNonNegativeInt } from "./shared.js";
 
 interface WalletMutationOpts {
   config: string;
@@ -60,16 +56,10 @@ async function resolveSignerMutationTarget(
   if (hasSecretRef) {
     const resolver = new SecretResolver();
     try {
-      const secret = await resolver.resolve(opts.secretRef!);
-      let keypair: Keypair;
-      try {
-        keypair = Keypair.fromSecret(secret);
-      } catch {
-        throw new Error("secret-ref must resolve to a valid Stellar secret seed (S...)");
-      }
+      const signer = await resolveSigner(opts.secretRef!, resolver);
 
       if (hasVerifierContractId) {
-        const publicKeyHex = credentialIdFromKeypair(keypair);
+        const publicKeyHex = signer.rawPublicKey().toString("hex");
         return {
           signerScVal: makeExternalSignerScVal(opts.verifierContractId!, publicKeyHex),
           signerDescriptor: {
@@ -81,7 +71,7 @@ async function resolveSignerMutationTarget(
         };
       }
 
-      const delegatedAddress = keypair.publicKey();
+      const delegatedAddress = signer.publicKey();
       return {
         signerScVal: makeDelegatedSignerScVal(delegatedAddress),
         signerDescriptor: {

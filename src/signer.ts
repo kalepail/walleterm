@@ -29,19 +29,26 @@ export function isMppPaymentSigner(signer: Signer): signer is MppPaymentSigner {
   return "secretSeed" in signer && typeof signer.secretSeed === "function";
 }
 
+export function requireKeypairSigner(signer: Signer, message: string): KeypairSigner {
+  if (!(signer instanceof KeypairSigner)) {
+    throw new Error(message);
+  }
+  return signer;
+}
+
 export class KeypairSigner implements PaymentSigner, MppPaymentSigner {
-  private readonly keypair: Keypair;
+  private readonly stellarKeypair: Keypair;
 
   constructor(keypair: Keypair) {
-    this.keypair = keypair;
+    this.stellarKeypair = keypair;
   }
 
   publicKey(): string {
-    return this.keypair.publicKey();
+    return this.stellarKeypair.publicKey();
   }
 
   rawPublicKey(): Buffer {
-    return Buffer.from(this.keypair.rawPublicKey());
+    return Buffer.from(this.stellarKeypair.rawPublicKey());
   }
 
   signatureHint(): Buffer {
@@ -50,7 +57,7 @@ export class KeypairSigner implements PaymentSigner, MppPaymentSigner {
   }
 
   async sign(data: Buffer): Promise<Buffer> {
-    return Buffer.from(this.keypair.sign(data));
+    return Buffer.from(this.stellarKeypair.sign(data));
   }
 
   async signDecorated(data: Buffer): Promise<xdr.DecoratedSignature> {
@@ -67,12 +74,16 @@ export class KeypairSigner implements PaymentSigner, MppPaymentSigner {
   }
 
   authEntrySigner(networkPassphrase: string): AuthEntrySigner {
-    const { signAuthEntry } = basicNodeSigner(this.keypair, networkPassphrase);
+    const { signAuthEntry } = basicNodeSigner(this.stellarKeypair, networkPassphrase);
     return { address: this.publicKey(), signAuthEntry };
   }
 
   secretSeed(): string {
-    return this.keypair.secret();
+    return this.stellarKeypair.secret();
+  }
+
+  keypair(): Keypair {
+    return this.stellarKeypair;
   }
 }
 
@@ -132,7 +143,7 @@ export class SshAgentSigner implements PaymentSigner {
   }
 }
 
-export async function createSshAgentSigner(ref: string): Promise<SshAgentSigner> {
+async function createSshAgentSigner(ref: string): Promise<SshAgentSigner> {
   const parsed = parseSshAgentRef(ref);
   const socketPath = resolveSocketPath(parsed.backend, parsed.socketPath);
   const identity = await findAgentIdentity(socketPath, parsed.stellarAddress);
@@ -151,7 +162,7 @@ export async function createSshAgentSigner(ref: string): Promise<SshAgentSigner>
   );
 }
 
-export async function resolvePaymentSigner(
+export async function resolveSigner(
   ref: string,
   resolver: SecretResolver,
   invalidSecretMessage = "secret-ref must resolve to a valid Stellar secret seed (S...)",
@@ -167,3 +178,5 @@ export async function resolvePaymentSigner(
     throw new Error(invalidSecretMessage);
   }
 }
+
+export const resolvePaymentSigner = resolveSigner;

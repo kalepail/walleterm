@@ -1,4 +1,5 @@
 import type { WalletermConfig } from "./types.js";
+import { enforcePaymentAmount } from "../payment-amount-policy.js";
 
 const VALID_SIGNER_MODES = ["subset", "exact"];
 const VALID_SUBMIT_MODES = ["sign-only", "channels"];
@@ -19,10 +20,6 @@ function isInsecureUrl(url: string): boolean {
 function isHex32Byte(value: string): boolean {
   const normalized = value.toLowerCase().replace(/^0x/, "");
   return /^[0-9a-f]{64}$/.test(normalized);
-}
-
-function isNonNegativeIntegerString(value: string): boolean {
-  return /^[0-9]+$/.test(value);
 }
 
 function warnInsecureUrl(field: string, url: string): void {
@@ -82,21 +79,19 @@ export function validateConfig(config: WalletermConfig): void {
   }
 
   if (config.payments?.mpp?.max_payment_amount !== undefined) {
-    const val = Number(config.payments.mpp.max_payment_amount);
-    if (isNaN(val) || val < 0) {
-      throw new Error(
-        "payments.mpp.max_payment_amount must be a valid non-negative numeric string",
-      );
-    }
+    enforcePaymentAmount({
+      amount: config.payments.mpp.max_payment_amount,
+      amountLabel: "payments.mpp.max_payment_amount",
+      grammar: "decimal",
+    });
   }
 
   if (config.payments?.mpp?.channel?.default_deposit !== undefined) {
-    const val = Number(config.payments.mpp.channel.default_deposit);
-    if (isNaN(val) || val < 0) {
-      throw new Error(
-        "payments.mpp.channel.default_deposit must be a valid non-negative numeric string",
-      );
-    }
+    enforcePaymentAmount({
+      amount: config.payments.mpp.channel.default_deposit,
+      amountLabel: "payments.mpp.channel.default_deposit",
+      grammar: "integer",
+    });
   }
 
   if (config.payments?.mpp?.channel?.refund_waiting_period !== undefined) {
@@ -109,12 +104,11 @@ export function validateConfig(config: WalletermConfig): void {
   }
 
   if (config.payments?.x402?.max_payment_amount !== undefined) {
-    const val = Number(config.payments.x402.max_payment_amount);
-    if (isNaN(val) || val < 0) {
-      throw new Error(
-        "payments.x402.max_payment_amount must be a valid non-negative numeric string",
-      );
-    }
+    enforcePaymentAmount({
+      amount: config.payments.x402.max_payment_amount,
+      amountLabel: "payments.x402.max_payment_amount",
+      grammar: "decimal",
+    });
   }
 
   if (
@@ -127,19 +121,19 @@ export function validateConfig(config: WalletermConfig): void {
   }
 
   if (config.payments?.x402?.channel?.default_deposit !== undefined) {
-    if (!isNonNegativeIntegerString(config.payments.x402.channel.default_deposit)) {
-      throw new Error(
-        "payments.x402.channel.default_deposit must be a valid non-negative integer string",
-      );
-    }
+    enforcePaymentAmount({
+      amount: config.payments.x402.channel.default_deposit,
+      amountLabel: "payments.x402.channel.default_deposit",
+      grammar: "integer",
+    });
   }
 
   if (config.payments?.x402?.channel?.max_deposit_amount !== undefined) {
-    if (!isNonNegativeIntegerString(config.payments.x402.channel.max_deposit_amount)) {
-      throw new Error(
-        "payments.x402.channel.max_deposit_amount must be a valid non-negative integer string",
-      );
-    }
+    enforcePaymentAmount({
+      amount: config.payments.x402.channel.max_deposit_amount,
+      amountLabel: "payments.x402.channel.max_deposit_amount",
+      grammar: "integer",
+    });
   }
 
   for (const [name, network] of Object.entries(config.networks)) {

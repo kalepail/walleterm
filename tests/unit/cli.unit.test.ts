@@ -23,8 +23,7 @@ const mocks = {
   mockSetupOnePasswordForWallet: vi.fn(),
   mockGenerateSshAgentKey: vi.fn(),
   mockSetupSshAgentForWallet: vi.fn(),
-  mockSubmitTxXdrViaRpc: vi.fn(),
-  mockSubmitViaChannels: vi.fn(),
+  mockSubmitConfiguredInput: vi.fn(),
   mockBuildSignerMutationBundle: vi.fn(),
   mockCreateWalletDeployTx: vi.fn(),
   mockDiscoverContractsByCredentialId: vi.fn(),
@@ -59,8 +58,7 @@ const {
   mockSetupOnePasswordForWallet,
   mockGenerateSshAgentKey,
   mockSetupSshAgentForWallet,
-  mockSubmitTxXdrViaRpc,
-  mockSubmitViaChannels,
+  mockSubmitConfiguredInput,
   mockBuildSignerMutationBundle,
   mockCreateWalletDeployTx,
   mockDiscoverContractsByCredentialId,
@@ -111,8 +109,7 @@ vi.mock("../../src/ssh-agent-setup.js", () => ({
 }));
 
 vi.mock("../../src/submit.js", () => ({
-  submitTxXdrViaRpc: mocks.mockSubmitTxXdrViaRpc,
-  submitViaChannels: mocks.mockSubmitViaChannels,
+  submitConfiguredInput: mocks.mockSubmitConfiguredInput,
 }));
 
 vi.mock("../../src/wallet.js", () => ({
@@ -136,7 +133,10 @@ vi.mock("../../src/secrets.js", () => {
     }
     clearCache(): void {}
   }
-  return { SecretResolver };
+  return {
+    isSshAgentRef: (ref: string) => ref.startsWith("ssh-agent://"),
+    SecretResolver,
+  };
 });
 
 async function run(args: string[]) {
@@ -370,8 +370,14 @@ beforeEach(() => {
     config_snippet: "[[smart_accounts.<alias>.delegated_signers]]",
   });
 
-  mockSubmitTxXdrViaRpc.mockResolvedValue({ hash: "txhash" });
-  mockSubmitViaChannels.mockResolvedValue({ mode: "channels", ok: true });
+  mockSubmitConfiguredInput.mockImplementation(async (request: any) => {
+    if (request.trigger === "configured" && request.config.app.default_submit_mode !== "channels") {
+      return null;
+    }
+    return request.mode === "rpc"
+      ? { mode: "rpc", request_kind: "tx", status: "SUCCESS", hash: "txhash" }
+      : { mode: "channels", request_kind: "tx", status: "confirmed", hash: "txhash" };
+  });
 
   mockMakeDelegatedSignerScVal.mockReturnValue({ type: "delegated-scv" });
   mockMakeExternalSignerScVal.mockReturnValue({ type: "external-scv" });
@@ -595,24 +601,25 @@ describe("cli unit", () => {
     ).rejects.toThrow(/Invalid integer value 'NaN'/i);
   });
 
-  it("submit rpc rejects non-tx input and succeeds for tx input", async () => {
-    mockParseInputFile.mockReturnValueOnce({ kind: "bundle", auth: [] });
-    await expect(run(["submit", "--in", "in.json", "--mode", "rpc"])).rejects.toThrow(
-      /RPC submission currently supports signed tx envelope input only/i,
-    );
-
-    mockParseInputFile.mockReturnValueOnce({
+  it("submit passes rpc mode to the submission interface and presents its result", async () => {
+    const input = {
       kind: "tx",
       envelope: { toXDR: () => "AAAA" },
-    });
+    };
+    mockParseInputFile.mockReturnValueOnce(input);
     const ok = await run(["submit", "--in", "in.xdr", "--mode", "rpc"]);
     expect(JSON.parse(ok.stdout)).toMatchObject({ mode: "rpc", request_kind: "tx" });
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({ input, mode: "rpc" }),
+    );
   });
 
   it("submit defaults to channels mode when --mode is omitted", async () => {
     mockParseInputFile.mockReturnValueOnce({ kind: "bundle", auth: [] });
     await run(["submit", "--in", "in.json"]);
-    expect(mockSubmitViaChannels).toHaveBeenCalledTimes(1);
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "channels" }),
+    );
   });
 
   it("submit forwards explicit channels overrides", async () => {
@@ -632,16 +639,16 @@ describe("cli unit", () => {
       "plugin-123",
     ]);
 
-    expect(mockSubmitViaChannels).toHaveBeenCalledWith(
-      { kind: "bundle", auth: [] },
-      expect.any(Object),
-      expect.any(Object),
-      {
-        channelsBaseUrl: "https://channels.example",
-        channelsApiKey: "api-key",
-        channelsApiKeyRef: "op://Private/item/channels_api_key",
-        pluginId: "plugin-123",
-      },
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: { kind: "bundle", auth: [] },
+        channels: {
+          channelsBaseUrl: "https://channels.example",
+          channelsApiKey: "api-key",
+          channelsApiKeyRef: "op://Private/item/channels_api_key",
+          pluginId: "plugin-123",
+        },
+      }),
     );
   });
 
@@ -1440,7 +1447,13 @@ describe("cli unit", () => {
     ]);
 
     expect(JSON.parse(out.stdout)).toMatchObject({ submitted: true });
-    expect(mockSubmitTxXdrViaRpc).toHaveBeenCalled();
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: { kind: "signed-tx", xdr: "AAAA" },
+        mode: "rpc",
+        trigger: "always",
+      }),
+    );
   });
 
   it("wallet create accepts valid external-ed25519 tuples and defaults submit mode to channels", async () => {
@@ -1460,7 +1473,9 @@ describe("cli unit", () => {
     ]);
 
     expect(mockMakeExternalSignerScVal).toHaveBeenCalledTimes(1);
-    expect(mockSubmitViaChannels).toHaveBeenCalledTimes(1);
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: undefined, trigger: "always" }),
+    );
     expect(JSON.parse(out.stdout)).toMatchObject({ submitted: true });
   });
 
@@ -1628,7 +1643,9 @@ describe("cli unit", () => {
       "out.xdr",
     ]);
 
-    expect(mockSubmitViaChannels).toHaveBeenCalled();
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: "configured" }),
+    );
     expect(JSON.parse(out.stdout)).toMatchObject({ submitted: true });
   });
 });

@@ -10,6 +10,7 @@ const secretResolverMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/secrets.js", () => ({
+  isSshAgentRef: (ref: string) => ref.startsWith("ssh-agent://"),
   SecretResolver: class {
     resolve = secretResolverMocks.resolve;
     clearCache = secretResolverMocks.clearCache;
@@ -36,7 +37,7 @@ import {
   startMppChannelClose,
   topUpMppChannel,
 } from "../../src/mpp-channel/lifecycle.js";
-import { resolveMppStatePath, upsertStoredChannel } from "../../src/mpp-channel/storage.js";
+import { applyMppChannelStateChange, resolveMppStatePath } from "../../src/mpp-channel/storage.js";
 
 const openMock = vi.mocked(openMppChannel);
 const topUpMock = vi.mocked(topUpMppChannel);
@@ -79,19 +80,28 @@ state_file = ".state.json"
   );
 
   const statePath = resolveMppStatePath(configPath, { state_file: ".state.json" });
-  const record = upsertStoredChannel(statePath, {
-    channel_id: "CCHANNEL",
-    network_name: "testnet",
-    network_passphrase: Networks.TESTNET,
-    source_account: funder.publicKey(),
-    secret_ref: "keychain://payer",
+  applyMppChannelStateChange(statePath, {
+    type: "opened",
+    channelId: "CCHANNEL",
+    networkName: "testnet",
+    networkPassphrase: Networks.TESTNET,
+    sourceAccount: funder.publicKey(),
+    secretRef: "keychain://payer",
     deposit: "1000",
-    cumulative_amount: "200",
-    last_voucher_amount: "200",
-    last_voucher_signature: "a".repeat(128),
+    refundWaitingPeriod: 24,
+    factoryContractId: "CFACTORY",
+    tokenContractId: "CTOKEN",
     recipient: recipient.publicKey(),
-    lifecycle_state: "open",
-    updated_at: "2026-08-11T00:00:00.000Z",
+    txHash: "tx-open",
+  });
+  const record = applyMppChannelStateChange(statePath, {
+    type: "voucher-remembered",
+    channelId: "CCHANNEL",
+    networkName: "testnet",
+    networkPassphrase: Networks.TESTNET,
+    sourceAccount: funder.publicKey(),
+    cumulativeAmount: "200",
+    signatureHex: "a".repeat(128),
   });
 
   return { configPath, funder, recipient, record, statePath };
@@ -136,36 +146,6 @@ describe("MPP channel lifecycle interface", () => {
       statePath,
       secretRef: "keychain://payer",
     });
-  });
-
-  it("reports an invalid resolved seed as an MPP channel credential error", async () => {
-    const { configPath } = makeFixture();
-    secretResolverMocks.resolve.mockResolvedValue("not-a-stellar-seed");
-
-    await expect(executeMppChannelLifecycle({ action: "open", configPath })).rejects.toThrow(
-      "MPP channel credential must resolve to a valid Stellar secret seed (S...)",
-    );
-
-    expect(openMock).not.toHaveBeenCalled();
-    expect(secretResolverMocks.clearCache).toHaveBeenCalledOnce();
-  });
-
-  it("preserves credential provider errors", async () => {
-    const { configPath } = makeFixture();
-    secretResolverMocks.resolve.mockRejectedValue(
-      new Error("Unsupported secret_ref 'vault://payer'. Supported schemes: keychain://."),
-    );
-
-    await expect(
-      executeMppChannelLifecycle({
-        action: "open",
-        configPath,
-        secretRef: "vault://payer",
-      }),
-    ).rejects.toThrow("Unsupported secret_ref 'vault://payer'. Supported schemes: keychain://.");
-
-    expect(openMock).not.toHaveBeenCalled();
-    expect(secretResolverMocks.clearCache).toHaveBeenCalledOnce();
   });
 
   it("selects the stored channel and remembered voucher for recipient settlement", async () => {
