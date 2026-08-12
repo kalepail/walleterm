@@ -80,6 +80,8 @@ Contract verification:
 
 ## Signing Engine
 
+`src/core/signing-engine.ts` owns the configured review and signing workflows. It resolves the network and account, reconciles signers, loads runtime signers, and computes expiration ledgers. It delegates payload inspection and cryptographic signing to the smaller `src/core/*` modules. The CLI supplies command input and presents the returned result.
+
 ### 1) Envelope signing
 Given transaction envelope XDR:
 - Parse network-specific tx hash preimage.
@@ -188,12 +190,15 @@ Submission methods:
 ## Payment Flow
 - `walleterm pay <url>` makes an HTTP request and retries after signing either an x402 or MPP payment payload when the server responds with HTTP 402.
 - The CLI now delegates pay-path orchestration to `src/payments/*`, with shared protocol selection and result normalization in `src/payments/index.ts` and protocol-specific adapters in `src/payments/x402.ts` and `src/payments/mpp.ts`.
+- Payment callers depend on signer capabilities from `src/signer.ts`. x402 requires auth-entry signing, while MPP charge requires access to a secret seed.
+- x402 auto mode reuses one initial HTTP 402 response for channel handling and exact fallback. It does not send a second initial request.
 - Protocol selection comes from `--protocol` or `[payments].default_protocol`, with x402 as the compatibility default.
 - Payer selection is protocol-specific: x402 resolves from `--secret-ref` or `[payments.x402]`; MPP resolves from `--secret-ref` or `[payments.mpp]`.
 - Protocol-specific `max_payment_amount` settings set a payment cap unless `--yes` is passed.
 - `--dry-run` returns the 402 challenge details without paying.
 - The canonical payment modes are x402 `exact`, x402 `channel`, MPP `charge`, and MPP `channel`.
 - MPP channel payments persist the latest voucher amount/signature locally so the CLI can top up, inspect, and close the active channel later.
+- `src/mpp-channel/execute.ts` owns MPP channel configuration, state selection, credential resolution, role checks, voucher selection, and action dispatch.
 - Current x402 and MPP network support is mapped from the standard Stellar testnet and mainnet passphrases only.
 
 ## Config Model (TOML)
