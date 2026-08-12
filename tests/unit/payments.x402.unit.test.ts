@@ -22,10 +22,6 @@ vi.mock("../../src/x402.js", async () => {
   return {
     ...actual,
     passphraseToX402Network: vi.fn(() => "stellar:testnet"),
-    createWalletermSigner: vi.fn((keypair: Keypair) => ({
-      address: keypair.publicKey(),
-      signAuthEntry: vi.fn(),
-    })),
     createX402HttpHandler: createX402HttpHandlerMock,
   };
 });

@@ -9,7 +9,6 @@ import { makeTempDir } from "../helpers/temp-dir.js";
 vi.mock("../../src/x402.js", async () => {
   return {
     passphraseToX402Network: vi.fn(() => "stellar:testnet"),
-    createWalletermSigner: vi.fn(() => ({ address: "GMOCK" })),
     createX402HttpHandler: vi.fn(() => ({})),
     executeX402Request: vi.fn(async () => ({
       paid: true,

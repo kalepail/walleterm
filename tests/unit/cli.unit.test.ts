@@ -299,7 +299,6 @@ beforeEach(() => {
   mockSignConfiguredInput.mockImplementation(async (request: any) => {
     if (typeof request.input === "function") {
       request.input({
-        account: "treasury",
         contractId: CONTRACT_ID,
         expirationLedger: 999,
       });
@@ -1183,6 +1182,8 @@ describe("cli unit", () => {
         "out.json",
       ]),
     ).rejects.toThrow(/context-rule-id must be a non-negative integer/i);
+
+    expect(mockSignConfiguredInput).not.toHaveBeenCalled();
   });
 
   it("wallet signer add validates signer target shapes", async () => {

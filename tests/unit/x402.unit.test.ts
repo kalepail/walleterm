@@ -2,7 +2,6 @@ import { Keypair } from "@stellar/stellar-sdk";
 import type { Network, PaymentPayload, PaymentRequired, SettleResponse } from "@x402/core/types";
 import { describe, expect, it, vi } from "vitest";
 import {
-  createWalletermSigner,
   createX402HttpHandler,
   executeX402Request,
   passphraseToX402Network,
@@ -89,19 +88,13 @@ describe("passphraseToX402Network", () => {
   });
 });
 
-describe("createWalletermSigner", () => {
-  it("returns signer with correct address", () => {
-    const keypair = Keypair.random();
-    const signer = createWalletermSigner(keypair, "stellar:testnet" as Network);
-    expect(signer.address).toBe(keypair.publicKey());
-    expect(typeof signer.signAuthEntry).toBe("function");
-  });
-});
-
 describe("createX402HttpHandler", () => {
   it("creates handler with required methods", () => {
     const keypair = Keypair.random();
-    const signer = createWalletermSigner(keypair, "stellar:testnet" as Network);
+    const signer = {
+      address: keypair.publicKey(),
+      signAuthEntry: vi.fn(),
+    };
     const handler = createX402HttpHandler(signer, "stellar:testnet" as Network, "https://rpc.test");
     expect(typeof handler.getPaymentRequiredResponse).toBe("function");
     expect(typeof handler.createPaymentPayload).toBe("function");

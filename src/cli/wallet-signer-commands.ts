@@ -128,26 +128,24 @@ async function runSignerMutation(
   signerDescriptor: Record<string, unknown>,
 ): Promise<void> {
   const config = loadConfig(opts.config);
-  let contextRuleId: number | undefined;
+  const contextRuleId = requireNonNegativeInt(
+    parseOptionalInt(opts.contextRuleId),
+    "context-rule-id",
+  );
   const { output, report, contractId } = await signConfiguredInput({
     config,
     network: opts.network,
     account: opts.account,
     ttlSeconds: parseOptionalInt(opts.ttlSeconds),
     latestLedger: parseOptionalInt(opts.latestLedger),
-    input: ({ contractId: selectedContractId, expirationLedger }) => {
-      contextRuleId = requireNonNegativeInt(
-        parseOptionalInt(opts.contextRuleId),
-        "context-rule-id",
-      );
-      return buildSignerMutationBundle(
+    input: ({ contractId: selectedContractId, expirationLedger }) =>
+      buildSignerMutationBundle(
         selectedContractId,
         functionName,
         contextRuleId,
         signerScVal,
         expirationLedger,
-      );
-    },
+      ),
   });
 
   writeOutput(opts.out, output);
