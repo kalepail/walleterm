@@ -78,6 +78,10 @@ function validateMppChannelStateTransition(
     return;
   }
   if (!existing) {
+    if (transition.type === "voucher-remembered") {
+      parseCumulativeAmount(transition.cumulativeAmount, "MPP channel cumulative amount");
+      return;
+    }
     throw new Error(`MPP channel ${transition.channelId} does not exist`);
   }
 

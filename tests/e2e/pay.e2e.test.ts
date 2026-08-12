@@ -998,7 +998,17 @@ state_file = ".state.json"
       channels: Record<string, Record<string, unknown>>;
     };
     expect(state.active_channel_by_network.testnet).toBe("CCHANNEL123");
-    expect(state.channels.CCHANNEL123?.last_voucher_amount).toBe("200");
+    expect(state.channels.CCHANNEL123).toMatchObject({
+      channel_id: "CCHANNEL123",
+      network_name: "testnet",
+      network_passphrase: "Test SDF Network ; September 2015",
+      source_account: keypair.publicKey(),
+      secret_ref: "keychain://walleterm-test/default_payer",
+      cumulative_amount: "200",
+      last_voucher_amount: "200",
+      last_voucher_signature: "a".repeat(128),
+      lifecycle_state: "open",
+    });
   });
 
   it("uses experimental x402 channel flow when --x402-scheme channel is selected", async () => {

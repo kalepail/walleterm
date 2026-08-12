@@ -365,18 +365,85 @@ describe("MPP channel state interface", () => {
     },
   );
 
-  it.each([
-    "topped-up",
-    "voucher-remembered",
-    "settled",
-    "close-started",
-    "closed",
-    "refunded",
-  ] as const)("requires an existing record for %s", (changeType) => {
-    expect(() => applyMppChannelStateChange(makeStatePath(), makeStateChange(changeType))).toThrow(
-      "MPP channel CCHANNEL does not exist",
-    );
+  it.each(["topped-up", "settled", "close-started", "closed", "refunded"] as const)(
+    "requires an existing record for %s",
+    (changeType) => {
+      expect(() =>
+        applyMppChannelStateChange(makeStatePath(), makeStateChange(changeType)),
+      ).toThrow("MPP channel CCHANNEL does not exist");
+    },
+  );
+
+  it("bootstraps a newly observed channel from its first valid voucher", () => {
+    const statePath = makeStatePath();
+    const cumulativeAmount = "900719925474099312345678901234567890";
+
+    const channel = rememberMppVoucher(statePath, {
+      channelId: "COBSERVED",
+      networkName: "testnet",
+      networkPassphrase: Networks.TESTNET,
+      sourceAccount: "GFUNDER",
+      secretRef: "keychain://payer",
+      cumulativeAmount,
+      signatureHex: "a".repeat(128),
+    });
+
+    expect(channel).toMatchObject({
+      channel_id: "COBSERVED",
+      network_name: "testnet",
+      network_passphrase: Networks.TESTNET,
+      source_account: "GFUNDER",
+      secret_ref: "keychain://payer",
+      cumulative_amount: cumulativeAmount,
+      last_voucher_amount: cumulativeAmount,
+      last_voucher_signature: "a".repeat(128),
+      lifecycle_state: "open",
+    });
+    expect(resolveStoredChannel(statePath, "testnet")).toEqual(channel);
   });
+
+  it.each(["-1", "1.5", "1e3"])(
+    "rejects invalid cumulative amount %s when bootstrapping an observed channel",
+    (cumulativeAmount) => {
+      const statePath = makeStatePath();
+
+      expect(() =>
+        rememberMppVoucher(statePath, {
+          channelId: "COBSERVED",
+          networkName: "testnet",
+          networkPassphrase: Networks.TESTNET,
+          sourceAccount: "GFUNDER",
+          cumulativeAmount,
+          signatureHex: "a".repeat(128),
+        }),
+      ).toThrow(/MPP channel cumulative amount must be a non-negative integer string/);
+      expect(resolveStoredChannel(statePath, "testnet", "COBSERVED")).toBeNull();
+    },
+  );
+
+  it.each(["closed", "refunded"] as const)(
+    "does not reactivate a %s channel through voucher storage",
+    (lifecycleState) => {
+      const statePath = makeStatePath();
+      seedLifecycleState(statePath, lifecycleState);
+
+      expect(() =>
+        rememberMppVoucher(statePath, {
+          channelId: "CCHANNEL",
+          networkName: "testnet",
+          networkPassphrase: Networks.TESTNET,
+          sourceAccount: "GFUNDER",
+          cumulativeAmount: "1",
+          signatureHex: "a".repeat(128),
+        }),
+      ).toThrow(
+        `MPP channel change 'voucher-remembered' is not allowed from lifecycle state '${lifecycleState}'`,
+      );
+      expect(resolveStoredChannel(statePath, "testnet", "CCHANNEL")?.lifecycle_state).toBe(
+        lifecycleState,
+      );
+    },
+  );
 
   it("does not replace an existing record with an opened change", () => {
     const statePath = makeStatePath();
