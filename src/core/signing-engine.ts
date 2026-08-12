@@ -173,7 +173,6 @@ export async function signConfiguredInput(
     const input =
       typeof request.input === "function"
         ? request.input({
-            account: accountRef.alias,
             contractId: accountRef.account.contract_id,
             expirationLedger,
           })

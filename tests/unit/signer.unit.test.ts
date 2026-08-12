@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Keypair, hash, xdr } from "@stellar/stellar-sdk";
+import { Keypair, Networks, hash, xdr } from "@stellar/stellar-sdk";
 import { KeypairSigner, SshAgentSigner, createSshAgentSigner } from "../../src/signer.js";
 import { makeFakeSshAgentFixture, type FakeSshAgentFixture } from "../helpers/fake-ssh-agent.js";
 
@@ -69,6 +69,19 @@ describe("KeypairSigner", () => {
     const txHash = txLike.hash();
     expect(keypair.verify(txHash, Buffer.from(decorated.signature()))).toBe(true);
     expect(Buffer.from(decorated.hint()).equals(signer.signatureHint())).toBe(true);
+  });
+
+  it("provides x402 auth-entry signing", async () => {
+    const authEntry = Buffer.from("keypair-auth-entry");
+    const authSigner = signer.authEntrySigner(Networks.TESTNET);
+
+    const signed = await authSigner.signAuthEntry(authEntry.toString("base64"));
+
+    expect(authSigner.address).toBe(keypair.publicKey());
+    expect(signed.signerAddress).toBe(keypair.publicKey());
+    expect(keypair.verify(hash(authEntry), Buffer.from(signed.signedAuthEntry, "base64"))).toBe(
+      true,
+    );
   });
 });
 
@@ -157,6 +170,21 @@ describe("SshAgentSigner", () => {
     const txHash = txLike.hash();
     expect(fixture.keypair.verify(txHash, Buffer.from(decorated.signature()))).toBe(true);
     expect(Buffer.from(decorated.hint()).equals(signer.signatureHint())).toBe(true);
+  });
+
+  it("provides x402 auth-entry signing", async () => {
+    fixture = await makeFakeSshAgentFixture();
+    const signer = await buildSshAgentSigner(fixture);
+    const authEntry = Buffer.from("ssh-agent-auth-entry");
+    const authSigner = signer.authEntrySigner(Networks.TESTNET);
+
+    const signed = await authSigner.signAuthEntry(authEntry.toString("base64"));
+
+    expect(authSigner.address).toBe(fixture.stellarAddress);
+    expect(signed.signerAddress).toBe(fixture.stellarAddress);
+    expect(
+      fixture.keypair.verify(hash(authEntry), Buffer.from(signed.signedAuthEntry, "base64")),
+    ).toBe(true);
   });
 });
 

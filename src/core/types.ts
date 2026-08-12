@@ -48,7 +48,6 @@ export interface SignReport {
 }
 
 export interface SigningInputContext {
-  account: string;
   contractId: string;
   expirationLedger: number;
 }

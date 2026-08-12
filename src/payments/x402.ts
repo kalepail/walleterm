@@ -44,7 +44,7 @@ export async function executeX402Payment(
           body: opts.body,
         })
       : undefined;
-  const exactFallbackResponse = initialResponse?.clone() as typeof initialResponse;
+  const exactFallbackResponse = initialResponse?.clone();
   if (opts.schemeSelection === "channel" || opts.schemeSelection === "auto") {
     const channelResult = await executeX402ChannelRequest(
       {

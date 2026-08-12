@@ -97,7 +97,13 @@ async function withSigner<T>(
 ): Promise<T> {
   const resolver = new SecretResolver();
   try {
-    const keypair = Keypair.fromSecret(await resolver.resolve(secretRef));
+    const secret = await resolver.resolve(secretRef);
+    let keypair: Keypair;
+    try {
+      keypair = Keypair.fromSecret(secret);
+    } catch {
+      throw new Error("MPP channel credential must resolve to a valid Stellar secret seed (S...)");
+    }
     if (record && role) assertChannelRole(record, keypair, role);
     return await run(keypair);
   } finally {
@@ -105,11 +111,16 @@ async function withSigner<T>(
   }
 }
 
+function unsupportedAction(_request: never): never {
+  throw new Error("Unsupported MPP channel action.");
+}
+
 export async function executeMppChannelLifecycle(request: MppChannelLifecycleRequest) {
+  const action = request.action;
   const context = loadLifecycleContext(request);
   const channelConfig = context.config.payments?.mpp?.channel;
 
-  if (request.action === "open") {
+  if (action === "open") {
     const secretRef = request.secretRef ?? context.config.payments?.mpp?.default_payer_secret_ref;
     if (!secretRef) {
       throw new Error(
@@ -156,7 +167,7 @@ export async function executeMppChannelLifecycle(request: MppChannelLifecycleReq
 
   const record = requireChannelRecord(context, request.channelId);
 
-  if (request.action === "status") {
+  if (action === "status") {
     const sourceAccount = record.source_account ?? channelConfig?.source_account;
     if (!sourceAccount) {
       throw new Error("MPP channel status requires a funded source account for simulations.");
@@ -170,7 +181,7 @@ export async function executeMppChannelLifecycle(request: MppChannelLifecycleReq
     return { ...status, stored: record };
   }
 
-  if (request.action === "topup") {
+  if (action === "topup") {
     const secretRef =
       request.secretRef ??
       record.secret_ref ??
@@ -192,10 +203,10 @@ export async function executeMppChannelLifecycle(request: MppChannelLifecycleReq
     );
   }
 
-  if (request.action === "settle" || request.action === "close") {
+  if (action === "settle" || action === "close") {
     const secretRef = request.secretRef ?? channelConfig?.recipient_secret_ref;
     if (!secretRef) {
-      const operation = request.action === "settle" ? "settle" : "close";
+      const operation = action === "settle" ? "settle" : "close";
       throw new Error(
         `No recipient signer specified for channel ${operation}. Pass --secret-ref or set payments.mpp.channel.recipient_secret_ref.`,
       );
@@ -203,7 +214,7 @@ export async function executeMppChannelLifecycle(request: MppChannelLifecycleReq
     const amountRaw = request.amount ?? record.last_voucher_amount ?? record.cumulative_amount;
     const signature = request.signature ?? record.last_voucher_signature;
     if (!amountRaw || !signature) {
-      if (request.action === "settle") {
+      if (action === "settle") {
         throw new Error(
           "No settlement voucher available. Pass --amount and --signature, or make at least one MPP channel payment first.",
         );
@@ -223,9 +234,13 @@ export async function executeMppChannelLifecycle(request: MppChannelLifecycleReq
         signatureHex: signature,
         statePath: context.statePath,
       };
-      if (request.action === "close") return closeMppChannel(common);
+      if (action === "close") return closeMppChannel(common);
       return settleMppChannel({ ...common, networkName: context.networkName });
     });
+  }
+
+  if (action !== "close-start" && action !== "refund") {
+    return unsupportedAction(action);
   }
 
   const secretRef =
@@ -233,7 +248,7 @@ export async function executeMppChannelLifecycle(request: MppChannelLifecycleReq
     record.secret_ref ??
     context.config.payments?.mpp?.default_payer_secret_ref;
   if (!secretRef) {
-    throw new Error(`No funder specified for channel ${request.action}.`);
+    throw new Error(`No funder specified for channel ${action}.`);
   }
   return withSigner(secretRef, record, "funder", (keypair) => {
     const common = {
@@ -244,7 +259,8 @@ export async function executeMppChannelLifecycle(request: MppChannelLifecycleReq
       channelId: record.channel_id,
       statePath: context.statePath,
     };
-    if (request.action === "close-start") return startMppChannelClose(common);
-    return refundMppChannel(common);
+    if (action === "close-start") return startMppChannelClose(common);
+    if (action === "refund") return refundMppChannel(common);
+    return unsupportedAction(action);
   });
 }

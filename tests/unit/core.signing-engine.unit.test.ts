@@ -59,7 +59,6 @@ describe("configured signing engine interface", () => {
       input: (context) => {
         order.push("build-input");
         expect(context).toEqual({
-          account: "treasury",
           contractId: CONTRACT,
           expirationLedger: 105,
         });

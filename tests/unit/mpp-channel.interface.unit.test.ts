@@ -138,6 +138,36 @@ describe("MPP channel lifecycle interface", () => {
     });
   });
 
+  it("reports an invalid resolved seed as an MPP channel credential error", async () => {
+    const { configPath } = makeFixture();
+    secretResolverMocks.resolve.mockResolvedValue("not-a-stellar-seed");
+
+    await expect(executeMppChannelLifecycle({ action: "open", configPath })).rejects.toThrow(
+      "MPP channel credential must resolve to a valid Stellar secret seed (S...)",
+    );
+
+    expect(openMock).not.toHaveBeenCalled();
+    expect(secretResolverMocks.clearCache).toHaveBeenCalledOnce();
+  });
+
+  it("preserves credential provider errors", async () => {
+    const { configPath } = makeFixture();
+    secretResolverMocks.resolve.mockRejectedValue(
+      new Error("Unsupported secret_ref 'vault://payer'. Supported schemes: keychain://."),
+    );
+
+    await expect(
+      executeMppChannelLifecycle({
+        action: "open",
+        configPath,
+        secretRef: "vault://payer",
+      }),
+    ).rejects.toThrow("Unsupported secret_ref 'vault://payer'. Supported schemes: keychain://.");
+
+    expect(openMock).not.toHaveBeenCalled();
+    expect(secretResolverMocks.clearCache).toHaveBeenCalledOnce();
+  });
+
   it("selects the stored channel and remembered voucher for recipient settlement", async () => {
     const { configPath, recipient, record, statePath } = makeFixture();
     secretResolverMocks.resolve.mockResolvedValue(recipient.secret());
@@ -246,5 +276,18 @@ describe("MPP channel lifecycle interface", () => {
       "keychain://payer",
       "keychain://payer",
     ]);
+  });
+
+  it("rejects an unknown lifecycle action instead of refunding", async () => {
+    const { configPath, funder } = makeFixture();
+    secretResolverMocks.resolve.mockResolvedValue(funder.secret());
+
+    await expect(
+      Reflect.apply(executeMppChannelLifecycle, undefined, [
+        { action: "future-action", configPath },
+      ]),
+    ).rejects.toThrow("Unsupported MPP channel action.");
+
+    expect(refundMock).not.toHaveBeenCalled();
   });
 });
