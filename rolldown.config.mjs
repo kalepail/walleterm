@@ -31,9 +31,11 @@ export default defineConfig({
   platform: "node",
   external: isExternal,
   output: {
-    file: "dist/cli.bundle.js",
+    dir: "dist",
+    entryFileNames: "cli.bundle.js",
+    chunkFileNames: "chunks/[name]-[hash].js",
+    cleanDir: true,
     format: "esm",
     sourcemap: true,
-    banner: "#!/usr/bin/env bun",
   },
 });
