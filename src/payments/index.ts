@@ -7,7 +7,6 @@ import type {
 } from "../config.js";
 import type { SecretResolver } from "../secrets.js";
 import { resolvePaymentSigner } from "../signer.js";
-import { executeMppPayment } from "./mpp.js";
 import type { PaymentExecution, PaymentExecutionResult } from "./types.js";
 import { executeX402Payment } from "./x402.js";
 
@@ -115,7 +114,6 @@ export async function executePaymentRequest(
       "No payer specified. Pass --secret-ref or set a protocol default payer secret ref in config.",
     );
   }
-
   const x402Payment = protocol === "x402";
   const payerSigner = await resolvePaymentSigner(secretRef, resolver);
   const payerPublicKey = payerSigner.publicKey();
@@ -161,23 +159,26 @@ export async function executePaymentRequest(
           yes: opts.yes,
           fetchFn,
         })
-      : await executeMppPayment({
-          url: opts.url,
-          method: opts.method,
-          headers: requestHeaders,
-          body: opts.body,
-          networkName,
-          network,
-          signer: payerSigner,
-          secretRef,
-          intent: intent!,
-          sourceAccount: opts.sourceAccount ?? config.payments?.mpp?.channel?.source_account,
-          dryRun: opts.dryRun,
-          maxPaymentAmount,
-          yes: opts.yes,
-          fetchFn,
-          mppChannelStatePath: opts.mppChannelStatePath,
-        });
+      : await (async () => {
+          const { executeMppPayment } = await import("./mpp.js");
+          return executeMppPayment({
+            url: opts.url,
+            method: opts.method,
+            headers: requestHeaders,
+            body: opts.body,
+            networkName,
+            network,
+            signer: payerSigner,
+            secretRef,
+            intent: intent!,
+            sourceAccount: opts.sourceAccount ?? config.payments?.mpp?.channel?.source_account,
+            dryRun: opts.dryRun,
+            maxPaymentAmount,
+            yes: opts.yes,
+            fetchFn,
+            mppChannelStatePath: opts.mppChannelStatePath,
+          });
+        })();
 
   return {
     protocol,

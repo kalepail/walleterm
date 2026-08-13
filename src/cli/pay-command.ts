@@ -3,7 +3,8 @@ import { Command } from "commander";
 import { loadConfig, resolveNetwork } from "../config.js";
 import { buildPaymentJsonResult, executePaymentRequest } from "../payments/index.js";
 import { SecretResolver } from "../secrets.js";
-import { collectValues, resolveMppChannelStatePath } from "./shared.js";
+import { resolveMppChannelStatePath } from "./mpp-shared.js";
+import { collectValues } from "./shared.js";
 
 interface PayOpts {
   config: string;

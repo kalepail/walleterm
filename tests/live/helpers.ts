@@ -11,8 +11,9 @@ import {
   TransactionBuilder,
   xdr,
 } from "@stellar/stellar-sdk";
+import { PROJECT_ROOT } from "../helpers/project-root.js";
 
-export const PROJECT_ROOT = "/Users/kalepail/Desktop/walleterm";
+export { PROJECT_ROOT };
 export const DEFAULT_WASM_HASH = "a12e8fa9621efd20315753bd4007d974390e31fbcb4a7ddc4dd0a0dec728bf2e";
 export const TESTNET_HORIZON_URL = "https://horizon-testnet.stellar.org";
 export const TESTNET_USDC_ISSUER = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";

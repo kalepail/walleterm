@@ -1,13 +1,11 @@
 import { Keypair } from "@stellar/stellar-sdk";
-import { resolveMppStatePath } from "../mpp-channel.js";
-import type { WalletermConfig } from "../config.js";
 
 export function parseOptionalInt(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) {
+  if (!/^-?[0-9]+$/.test(value)) {
     throw new Error(`Invalid integer value '${value}'`);
   }
+  const parsed = Number(value);
   return parsed;
 }
 
@@ -32,8 +30,4 @@ export function buildKeypairJson(keypair: Keypair): Record<string, string> {
     public_key: keypair.publicKey(),
     public_key_hex: credentialIdFromKeypair(keypair),
   };
-}
-
-export function resolveMppChannelStatePath(configPath: string, config: WalletermConfig): string {
-  return resolveMppStatePath(configPath, config.payments?.mpp?.channel);
 }

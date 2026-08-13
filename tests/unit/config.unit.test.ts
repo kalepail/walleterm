@@ -65,6 +65,24 @@ describe("config unit", () => {
     expect(() => loadConfig(writeConfig(cfg))).toThrow(/networks\.testnet\.rpc_url is required/i);
   });
 
+  it("throws when required string fields are blank", () => {
+    const blankDefaultNetwork = BASE_CONFIG.replace(
+      'default_network = "testnet"',
+      'default_network = "   "',
+    );
+    expect(() => loadConfig(writeConfig(blankDefaultNetwork))).toThrow(
+      /app\.default_network is required/i,
+    );
+
+    const blankRpcUrl = BASE_CONFIG.replace(
+      'rpc_url = "https://example.test/rpc"',
+      'rpc_url = "   "',
+    );
+    expect(() => loadConfig(writeConfig(blankRpcUrl))).toThrow(
+      /networks\.testnet\.rpc_url is required/i,
+    );
+  });
+
   it("throws when a network is missing network_passphrase", () => {
     const cfg = BASE_CONFIG.replace(
       'network_passphrase = "Test SDF Network ; September 2015"\n',
@@ -197,7 +215,7 @@ secret_ref = "op://v/i/del"
     expect(config.smart_accounts.a?.external_signers?.[0]?.name).toBe("ext");
     expect(config.smart_accounts.a?.delegated_signers?.[0]?.name).toBe("del");
 
-    const sparseCfg = `[app]
+    const sparseExternalCfg = `[app]
 default_network = "testnet"
 
 [networks.testnet]
@@ -210,24 +228,28 @@ contract_id = "CTESTACCOUNTA"
 
 [[smart_accounts.a.external_signers]]
 enabled = true
+`;
+    expect(() => loadConfig(writeConfig(sparseExternalCfg))).toThrow(
+      /smart_accounts\.a\.external_signers\[0\]\.name is required/i,
+    );
+
+    const sparseDelegatedCfg = `[app]
+default_network = "testnet"
+
+[networks.testnet]
+rpc_url = "https://example.test/rpc"
+network_passphrase = "Test SDF Network ; September 2015"
+
+[smart_accounts.a]
+network = "testnet"
+contract_id = "CTESTACCOUNTA"
 
 [[smart_accounts.a.delegated_signers]]
 enabled = true
 `;
-    const sparse = loadConfig(writeConfig(sparseCfg));
-    expect(sparse.smart_accounts.a?.external_signers?.[0]).toMatchObject({
-      name: "",
-      verifier_contract_id: "",
-      public_key_hex: "",
-      secret_ref: "",
-      enabled: true,
-    });
-    expect(sparse.smart_accounts.a?.delegated_signers?.[0]).toMatchObject({
-      name: "",
-      address: "",
-      secret_ref: "",
-      enabled: true,
-    });
+    expect(() => loadConfig(writeConfig(sparseDelegatedCfg))).toThrow(
+      /smart_accounts\.a\.delegated_signers\[0\]\.name is required/i,
+    );
   });
 
   it("rejects invalid onchain_signer_mode", () => {
@@ -257,7 +279,7 @@ contract_id = "CTESTACCOUNTA"
   it("rejects NaN default_ttl_seconds", () => {
     const cfg = BASE_CONFIG.replace("default_ttl_seconds = 30", 'default_ttl_seconds = "abc"');
     expect(() => loadConfig(writeConfig(cfg))).toThrow(
-      /app\.default_ttl_seconds must be a valid number/i,
+      /app\.default_ttl_seconds must be a number/i,
     );
   });
 
@@ -267,7 +289,7 @@ contract_id = "CTESTACCOUNTA"
       'assumed_ledger_time_seconds = "abc"',
     );
     expect(() => loadConfig(writeConfig(cfg))).toThrow(
-      /app\.assumed_ledger_time_seconds must be a valid number/i,
+      /app\.assumed_ledger_time_seconds must be a number/i,
     );
   });
 
@@ -598,18 +620,7 @@ refund_waiting_period = -1
     );
   });
 
-  it("coerces unexpected types in config fields via String() without crashing", () => {
-    // When TOML parsing yields a number where a string is expected, loadConfig
-    // calls String() which coerces it. Verify this produces technically valid
-    // (but likely broken) configs rather than crashing.
-    //
-    // We cannot feed a raw number through TOML for rpc_url since TOML typing
-    // enforces string values for table fields. Instead we test through the
-    // normalizer functions by constructing TOML that exercises String() coercion
-    // on fields that go through String().
-
-    // rpc_url = 42 in TOML is an integer. This tests that the config loader
-    // coerces it to the string "42" rather than throwing.
+  it("rejects unexpected types in string-backed config fields", () => {
     const numericRpcUrl = `[app]
 default_network = "testnet"
 
@@ -621,14 +632,12 @@ network_passphrase = true
 network = "testnet"
 contract_id = "CTESTACCOUNTA"
 `;
-    const config = loadConfig(writeConfig(numericRpcUrl));
-    // String(42) -> "42"
-    expect(config.networks.testnet?.rpc_url).toBe("42");
-    // String(true) -> "true"
-    expect(config.networks.testnet?.network_passphrase).toBe("true");
+    expect(() => loadConfig(writeConfig(numericRpcUrl))).toThrow(
+      /networks\.testnet\.rpc_url must be a string/i,
+    );
   });
 
-  it("loads x402_facilitator_url in network config", () => {
+  it("rejects unsupported x402_facilitator_url", () => {
     const cfg = `[app]
 default_network = "testnet"
 
@@ -639,8 +648,9 @@ x402_facilitator_url = "https://facilitator.example.com"
 
 [smart_accounts]
 `;
-    const config = loadConfig(writeConfig(cfg));
-    expect(config.networks.testnet?.x402_facilitator_url).toBe("https://facilitator.example.com");
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(
+      /networks\.testnet\.x402_facilitator_url is no longer supported/i,
+    );
   });
 
   it("rejects invalid expected_wasm_hash values", () => {
@@ -661,22 +671,19 @@ expected_wasm_hash = "abcd"
     );
   });
 
-  it("warns on non-localhost x402_facilitator_url over HTTP", () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  it("rejects unexpected types in boolean-backed config fields", () => {
     const cfg = `[app]
 default_network = "testnet"
+strict_onchain = "yes"
 
 [networks.testnet]
 rpc_url = "https://example.test/rpc"
 network_passphrase = "Test SDF Network ; September 2015"
-x402_facilitator_url = "http://facilitator.example.com"
 
 [smart_accounts.a]
 network = "testnet"
 contract_id = "CTESTACCOUNTA"
 `;
-    loadConfig(writeConfig(cfg));
-    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("x402_facilitator_url"));
-    stderrSpy.mockRestore();
+    expect(() => loadConfig(writeConfig(cfg))).toThrow(/app\.strict_onchain must be a boolean/i);
   });
 });

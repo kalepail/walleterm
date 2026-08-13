@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { parse } from "@iarna/toml";
 import type {
-  MppIntent,
-  PaymentProtocol,
-  SignerMode,
   DelegatedSignerConfig,
   ExternalSignerConfig,
+  MppIntent,
+  PaymentProtocol,
   PaymentsConfig,
+  SignerMode,
   SmartAccountConfig,
   WalletermConfig,
   X402ChannelConfig,
@@ -27,29 +27,74 @@ function asArray<T>(value: unknown, fallback: T[]): T[] {
   return value as T[];
 }
 
-function normalizeExternalSigners(input: unknown): ExternalSignerConfig[] {
+function readNonEmptyString(value: unknown, context: string): string {
+  if (value === undefined) {
+    throw new Error(`${context} is required`);
+  }
+  if (typeof value !== "string") {
+    throw new Error(`${context} must be a string`);
+  }
+  if (value.trim().length === 0) {
+    throw new Error(`${context} is required`);
+  }
+  return value;
+}
+
+function readOptionalString(value: unknown, context: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new Error(`${context} must be a string`);
+  }
+  return value;
+}
+
+function readOptionalBoolean(value: unknown, context: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") {
+    throw new Error(`${context} must be a boolean`);
+  }
+  return value;
+}
+
+function readOptionalNumber(value: unknown, context: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    throw new Error(`${context} must be a number`);
+  }
+  return value;
+}
+
+function normalizeExternalSigners(input: unknown, context: string): ExternalSignerConfig[] {
   const rows = asArray<Record<string, unknown>>(input, []);
   return rows.map((row, index) => {
-    const obj = assertObject(row, `external_signers[${index}]`);
+    const itemContext = `${context}[${index}]`;
+    const obj = assertObject(row, itemContext);
     return {
-      name: String(obj.name ?? ""),
-      verifier_contract_id: String(obj.verifier_contract_id ?? ""),
-      public_key_hex: String(obj.public_key_hex ?? "").toLowerCase(),
-      secret_ref: String(obj.secret_ref ?? ""),
-      enabled: obj.enabled === undefined ? true : Boolean(obj.enabled),
+      name: readNonEmptyString(obj.name, `${itemContext}.name`),
+      verifier_contract_id: readNonEmptyString(
+        obj.verifier_contract_id,
+        `${itemContext}.verifier_contract_id`,
+      ),
+      public_key_hex: readNonEmptyString(
+        obj.public_key_hex,
+        `${itemContext}.public_key_hex`,
+      ).toLowerCase(),
+      secret_ref: readNonEmptyString(obj.secret_ref, `${itemContext}.secret_ref`),
+      enabled: readOptionalBoolean(obj.enabled, `${itemContext}.enabled`) ?? true,
     };
   });
 }
 
-function normalizeDelegatedSigners(input: unknown): DelegatedSignerConfig[] {
+function normalizeDelegatedSigners(input: unknown, context: string): DelegatedSignerConfig[] {
   const rows = asArray<Record<string, unknown>>(input, []);
   return rows.map((row, index) => {
-    const obj = assertObject(row, `delegated_signers[${index}]`);
+    const itemContext = `${context}[${index}]`;
+    const obj = assertObject(row, itemContext);
     return {
-      name: String(obj.name ?? ""),
-      address: String(obj.address ?? ""),
-      secret_ref: String(obj.secret_ref ?? ""),
-      enabled: obj.enabled === undefined ? true : Boolean(obj.enabled),
+      name: readNonEmptyString(obj.name, `${itemContext}.name`),
+      address: readNonEmptyString(obj.address, `${itemContext}.address`),
+      secret_ref: readNonEmptyString(obj.secret_ref, `${itemContext}.secret_ref`),
+      enabled: readOptionalBoolean(obj.enabled, `${itemContext}.enabled`) ?? true,
     };
   });
 }
@@ -58,12 +103,13 @@ function normalizeX402Channel(input: unknown, context: string): X402ChannelConfi
   if (!input) return undefined;
   const obj = assertObject(input, context);
   return {
-    state_file: obj.state_file ? String(obj.state_file) : undefined,
-    default_deposit: obj.default_deposit ? String(obj.default_deposit) : undefined,
-    max_deposit_amount: obj.max_deposit_amount ? String(obj.max_deposit_amount) : undefined,
-    commitment_secret_ref: obj.commitment_secret_ref
-      ? String(obj.commitment_secret_ref)
-      : undefined,
+    state_file: readOptionalString(obj.state_file, `${context}.state_file`),
+    default_deposit: readOptionalString(obj.default_deposit, `${context}.default_deposit`),
+    max_deposit_amount: readOptionalString(obj.max_deposit_amount, `${context}.max_deposit_amount`),
+    commitment_secret_ref: readOptionalString(
+      obj.commitment_secret_ref,
+      `${context}.commitment_secret_ref`,
+    ),
   };
 }
 
@@ -71,13 +117,14 @@ function normalizeX402(input: unknown, context: string): X402Config | undefined 
   if (!input) return undefined;
   const obj = assertObject(input, context);
   return {
-    default_payer_secret_ref: obj.default_payer_secret_ref
-      ? String(obj.default_payer_secret_ref)
-      : undefined,
-    max_payment_amount: obj.max_payment_amount ? String(obj.max_payment_amount) : undefined,
-    default_scheme: obj.default_scheme
-      ? (String(obj.default_scheme) as X402Config["default_scheme"])
-      : undefined,
+    default_payer_secret_ref: readOptionalString(
+      obj.default_payer_secret_ref,
+      `${context}.default_payer_secret_ref`,
+    ),
+    max_payment_amount: readOptionalString(obj.max_payment_amount, `${context}.max_payment_amount`),
+    default_scheme: readOptionalString(obj.default_scheme, `${context}.default_scheme`) as
+      | X402Config["default_scheme"]
+      | undefined,
     channel: normalizeX402Channel(obj.channel, `${context}.channel`),
   };
 }
@@ -91,46 +138,62 @@ function normalizePayments(input: unknown): PaymentsConfig | undefined {
     : undefined;
 
   return {
-    default_protocol: paymentsObj.default_protocol
-      ? (String(paymentsObj.default_protocol) as PaymentProtocol)
-      : undefined,
+    default_protocol: readOptionalString(
+      paymentsObj.default_protocol,
+      "payments.default_protocol",
+    ) as PaymentProtocol | undefined,
     mpp: mppObj
       ? {
-          default_intent: mppObj.default_intent
-            ? (String(mppObj.default_intent) as MppIntent)
-            : undefined,
-          default_payer_secret_ref: mppObj.default_payer_secret_ref
-            ? String(mppObj.default_payer_secret_ref)
-            : undefined,
-          max_payment_amount: mppObj.max_payment_amount
-            ? String(mppObj.max_payment_amount)
-            : undefined,
+          default_intent: readOptionalString(
+            mppObj.default_intent,
+            "payments.mpp.default_intent",
+          ) as MppIntent | undefined,
+          default_payer_secret_ref: readOptionalString(
+            mppObj.default_payer_secret_ref,
+            "payments.mpp.default_payer_secret_ref",
+          ),
+          max_payment_amount: readOptionalString(
+            mppObj.max_payment_amount,
+            "payments.mpp.max_payment_amount",
+          ),
           channel: mppChannelObj
             ? {
-                default_channel_contract_id: mppChannelObj.default_channel_contract_id
-                  ? String(mppChannelObj.default_channel_contract_id)
-                  : undefined,
-                default_deposit: mppChannelObj.default_deposit
-                  ? String(mppChannelObj.default_deposit)
-                  : undefined,
-                factory_contract_id: mppChannelObj.factory_contract_id
-                  ? String(mppChannelObj.factory_contract_id)
-                  : undefined,
-                recipient: mppChannelObj.recipient ? String(mppChannelObj.recipient) : undefined,
-                recipient_secret_ref: mppChannelObj.recipient_secret_ref
-                  ? String(mppChannelObj.recipient_secret_ref)
-                  : undefined,
-                refund_waiting_period:
-                  mppChannelObj.refund_waiting_period === undefined
-                    ? undefined
-                    : Number(mppChannelObj.refund_waiting_period),
-                source_account: mppChannelObj.source_account
-                  ? String(mppChannelObj.source_account)
-                  : undefined,
-                state_file: mppChannelObj.state_file ? String(mppChannelObj.state_file) : undefined,
-                token_contract_id: mppChannelObj.token_contract_id
-                  ? String(mppChannelObj.token_contract_id)
-                  : undefined,
+                default_channel_contract_id: readOptionalString(
+                  mppChannelObj.default_channel_contract_id,
+                  "payments.mpp.channel.default_channel_contract_id",
+                ),
+                default_deposit: readOptionalString(
+                  mppChannelObj.default_deposit,
+                  "payments.mpp.channel.default_deposit",
+                ),
+                factory_contract_id: readOptionalString(
+                  mppChannelObj.factory_contract_id,
+                  "payments.mpp.channel.factory_contract_id",
+                ),
+                recipient: readOptionalString(
+                  mppChannelObj.recipient,
+                  "payments.mpp.channel.recipient",
+                ),
+                recipient_secret_ref: readOptionalString(
+                  mppChannelObj.recipient_secret_ref,
+                  "payments.mpp.channel.recipient_secret_ref",
+                ),
+                refund_waiting_period: readOptionalNumber(
+                  mppChannelObj.refund_waiting_period,
+                  "payments.mpp.channel.refund_waiting_period",
+                ),
+                source_account: readOptionalString(
+                  mppChannelObj.source_account,
+                  "payments.mpp.channel.source_account",
+                ),
+                state_file: readOptionalString(
+                  mppChannelObj.state_file,
+                  "payments.mpp.channel.state_file",
+                ),
+                token_contract_id: readOptionalString(
+                  mppChannelObj.token_contract_id,
+                  "payments.mpp.channel.token_contract_id",
+                ),
               }
             : undefined,
         }
@@ -154,14 +217,28 @@ export function loadConfig(path: string): WalletermConfig {
   const networks: WalletermConfig["networks"] = {};
   for (const [name, value] of Object.entries(networksObj)) {
     const row = assertObject(value, `networks.${name}`);
+    if (row.x402_facilitator_url !== undefined) {
+      throw new Error(`networks.${name}.x402_facilitator_url is no longer supported`);
+    }
     networks[name] = {
-      rpc_url: String(row.rpc_url ?? ""),
-      network_passphrase: String(row.network_passphrase ?? ""),
-      indexer_url: row.indexer_url ? String(row.indexer_url) : undefined,
-      channels_base_url: row.channels_base_url ? String(row.channels_base_url) : undefined,
-      channels_api_key_ref: row.channels_api_key_ref ? String(row.channels_api_key_ref) : undefined,
-      deployer_secret_ref: row.deployer_secret_ref ? String(row.deployer_secret_ref) : undefined,
-      x402_facilitator_url: row.x402_facilitator_url ? String(row.x402_facilitator_url) : undefined,
+      rpc_url: readNonEmptyString(row.rpc_url, `networks.${name}.rpc_url`),
+      network_passphrase: readNonEmptyString(
+        row.network_passphrase,
+        `networks.${name}.network_passphrase`,
+      ),
+      indexer_url: readOptionalString(row.indexer_url, `networks.${name}.indexer_url`),
+      channels_base_url: readOptionalString(
+        row.channels_base_url,
+        `networks.${name}.channels_base_url`,
+      ),
+      channels_api_key_ref: readOptionalString(
+        row.channels_api_key_ref,
+        `networks.${name}.channels_api_key_ref`,
+      ),
+      deployer_secret_ref: readOptionalString(
+        row.deployer_secret_ref,
+        `networks.${name}.deployer_secret_ref`,
+      ),
     };
   }
 
@@ -169,26 +246,38 @@ export function loadConfig(path: string): WalletermConfig {
   for (const [alias, value] of Object.entries(smartAccountsObj)) {
     const row = assertObject(value, `smart_accounts.${alias}`);
     smart_accounts[alias] = {
-      network: String(row.network ?? ""),
-      contract_id: String(row.contract_id ?? ""),
-      expected_wasm_hash: row.expected_wasm_hash ? String(row.expected_wasm_hash) : undefined,
-      external_signers: normalizeExternalSigners(row.external_signers),
-      delegated_signers: normalizeDelegatedSigners(row.delegated_signers),
+      network: readNonEmptyString(row.network, `smart_accounts.${alias}.network`),
+      contract_id: readNonEmptyString(row.contract_id, `smart_accounts.${alias}.contract_id`),
+      expected_wasm_hash: readOptionalString(
+        row.expected_wasm_hash,
+        `smart_accounts.${alias}.expected_wasm_hash`,
+      ),
+      external_signers: normalizeExternalSigners(
+        row.external_signers,
+        `smart_accounts.${alias}.external_signers`,
+      ),
+      delegated_signers: normalizeDelegatedSigners(
+        row.delegated_signers,
+        `smart_accounts.${alias}.delegated_signers`,
+      ),
     };
   }
 
   const config: WalletermConfig = {
     app: {
-      default_network: String(appObj.default_network ?? ""),
-      strict_onchain: appObj.strict_onchain === undefined ? true : Boolean(appObj.strict_onchain),
-      onchain_signer_mode: appObj.onchain_signer_mode
-        ? (String(appObj.onchain_signer_mode) as SignerMode)
-        : "subset",
-      default_ttl_seconds: Number(appObj.default_ttl_seconds ?? 30),
-      assumed_ledger_time_seconds: Number(appObj.assumed_ledger_time_seconds ?? 6),
-      default_submit_mode: appObj.default_submit_mode
-        ? String(appObj.default_submit_mode)
-        : "sign-only",
+      default_network: readNonEmptyString(appObj.default_network, "app.default_network"),
+      strict_onchain: readOptionalBoolean(appObj.strict_onchain, "app.strict_onchain") ?? true,
+      onchain_signer_mode:
+        (readOptionalString(appObj.onchain_signer_mode, "app.onchain_signer_mode") as
+          | SignerMode
+          | undefined) ?? "subset",
+      default_ttl_seconds:
+        readOptionalNumber(appObj.default_ttl_seconds, "app.default_ttl_seconds") ?? 30,
+      assumed_ledger_time_seconds:
+        readOptionalNumber(appObj.assumed_ledger_time_seconds, "app.assumed_ledger_time_seconds") ??
+        6,
+      default_submit_mode:
+        readOptionalString(appObj.default_submit_mode, "app.default_submit_mode") ?? "sign-only",
     },
     networks,
     smart_accounts,

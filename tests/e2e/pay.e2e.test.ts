@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Keypair } from "@stellar/stellar-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeFakeSecurityFixture } from "../helpers/fake-security.js";
+import { makeFakeSshAgentFixture } from "../helpers/fake-ssh-agent.js";
 import { runCliInProcess } from "../helpers/run-cli.js";
 import { makeTempDir } from "../helpers/temp-dir.js";
 
@@ -858,6 +859,32 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
     });
     expect(parsed.payment_required).toBeUndefined();
     expect(parsed.payment_payload).toBeUndefined();
+  });
+
+  it("rejects ssh-agent refs for MPP with a clear error", async () => {
+    const { configPath, env } = makeFixture();
+    const fixture = await makeFakeSshAgentFixture();
+    const secretRef = `ssh-agent://custom/${fixture.stellarAddress}?socket=${encodeURIComponent(fixture.socketPath)}`;
+
+    try {
+      await expect(
+        runCliInProcess(
+          [
+            "pay",
+            "https://example.com/resource",
+            "--config",
+            configPath,
+            "--protocol",
+            "mpp",
+            "--secret-ref",
+            secretRef,
+          ],
+          env,
+        ),
+      ).rejects.toThrow(/MPP payments require a signer with secret-seed capability/i);
+    } finally {
+      await fixture.cleanup();
+    }
   });
 
   it("uses payments.mpp defaults for protocol and payer", async () => {

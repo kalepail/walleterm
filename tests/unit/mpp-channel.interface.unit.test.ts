@@ -191,6 +191,18 @@ describe("MPP channel lifecycle interface", () => {
     expect(secretResolverMocks.clearCache).toHaveBeenCalledOnce();
   });
 
+  it("rejects an invalid seed before it starts an open transition", async () => {
+    const { configPath } = makeFixture();
+    secretResolverMocks.resolve.mockResolvedValue("not-a-seed");
+
+    await expect(executeMppChannelLifecycle({ action: "open", configPath })).rejects.toThrow(
+      /MPP channel credential must resolve to a valid Stellar secret seed/i,
+    );
+
+    expect(openMock).not.toHaveBeenCalled();
+    expect(secretResolverMocks.clearCache).toHaveBeenCalledOnce();
+  });
+
   it("returns status with the selected stored record", async () => {
     const { configPath, record } = makeFixture();
     statusMock.mockResolvedValue({

@@ -55,10 +55,9 @@ Fields:
   - provider-backed secret ref like `op://...` or `keychain://...`, or
   - direct API key string.
 - `deployer_secret_ref` (optional): `wallet create` override source. If omitted, CLI uses the smart-account-kit deterministic deployer.
-- `x402_facilitator_url` (optional): Parsed and validated for forward compatibility, but currently unused by the CLI runtime.
 
 Notes:
-- Config validation warns on non-HTTPS `rpc_url`, `indexer_url`, `channels_base_url`, and `x402_facilitator_url` values unless they target `localhost` or `127.0.0.1`.
+- Config validation warns on non-HTTPS `rpc_url`, `indexer_url`, and `channels_base_url` values unless they target `localhost` or `127.0.0.1`.
 - The default smart-account-kit deployer is intentionally deterministic and public. It should never hold meaningful balances.
 
 ## 3) smart_accounts section
@@ -95,6 +94,8 @@ Fields:
   - `keychain://walleterm-testnet/delegated_seed`
 - `enabled` (optional, default `true`)
 
+Each delegated signer row must be complete. Empty or partial entries are rejected during config load.
+
 ### external_signers
 
 ```toml
@@ -112,6 +113,8 @@ Fields:
 - `public_key_hex` (required): 32-byte ed25519 public key in hex.
 - `secret_ref` (required): Provider-backed secret ref to corresponding Stellar seed (`S...`).
 - `enabled` (optional, default `true`)
+
+Each external signer row must be complete. Empty or partial entries are rejected during config load.
 
 ## 4) Minimal Valid Config
 

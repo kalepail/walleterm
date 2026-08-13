@@ -19,7 +19,6 @@ export interface NetworkConfig {
   channels_base_url?: string;
   channels_api_key_ref?: string;
   deployer_secret_ref?: string;
-  x402_facilitator_url?: string;
 }
 
 export interface ExternalSignerConfig {

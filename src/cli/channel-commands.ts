@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { executeMppChannelLifecycle, type MppChannelLifecycleRequest } from "../mpp-channel.js";
+import type { MppChannelLifecycleRequest } from "../mpp-channel.js";
 
 interface ChannelBaseOpts {
   config: string;
@@ -32,6 +32,7 @@ interface ChannelFunderOpts extends ChannelBaseOpts {
 }
 
 async function runLifecycle(request: MppChannelLifecycleRequest): Promise<void> {
+  const { executeMppChannelLifecycle } = await import("../mpp-channel.js");
   const result = await executeMppChannelLifecycle(request);
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
