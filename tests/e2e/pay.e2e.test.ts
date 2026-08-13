@@ -3,13 +3,13 @@ import { join } from "node:path";
 import { Keypair } from "@stellar/stellar-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeFakeSecurityFixture } from "../helpers/fake-security.js";
+import { makeFakeSshAgentFixture } from "../helpers/fake-ssh-agent.js";
 import { runCliInProcess } from "../helpers/run-cli.js";
 import { makeTempDir } from "../helpers/temp-dir.js";
 
 vi.mock("../../src/x402.js", async () => {
   return {
     passphraseToX402Network: vi.fn(() => "stellar:testnet"),
-    createWalletermSigner: vi.fn(() => ({ address: "GMOCK" })),
     createX402HttpHandler: vi.fn(() => ({})),
     executeX402Request: vi.fn(async () => ({
       paid: true,
@@ -862,19 +862,29 @@ default_payer_secret_ref = "keychain://walleterm-test/default_payer"
   });
 
   it("rejects ssh-agent refs for MPP with a clear error", async () => {
-    const { configPath } = makeFixture();
-    await expect(
-      runCliInProcess([
-        "pay",
-        "https://example.com/resource",
-        "--config",
-        configPath,
-        "--protocol",
-        "mpp",
-        "--secret-ref",
-        "ssh-agent://system/GTESTPAYLOAD",
-      ]),
-    ).rejects.toThrow(/MPP payments currently require a seed-backed secret ref/i);
+    const { configPath, env } = makeFixture();
+    const fixture = await makeFakeSshAgentFixture();
+    const secretRef = `ssh-agent://custom/${fixture.stellarAddress}?socket=${encodeURIComponent(fixture.socketPath)}`;
+
+    try {
+      await expect(
+        runCliInProcess(
+          [
+            "pay",
+            "https://example.com/resource",
+            "--config",
+            configPath,
+            "--protocol",
+            "mpp",
+            "--secret-ref",
+            secretRef,
+          ],
+          env,
+        ),
+      ).rejects.toThrow(/MPP payments require a signer with secret-seed capability/i);
+    } finally {
+      await fixture.cleanup();
+    }
   });
 
   it("uses payments.mpp defaults for protocol and payer", async () => {
@@ -1015,7 +1025,17 @@ state_file = ".state.json"
       channels: Record<string, Record<string, unknown>>;
     };
     expect(state.active_channel_by_network.testnet).toBe("CCHANNEL123");
-    expect(state.channels.CCHANNEL123?.last_voucher_amount).toBe("200");
+    expect(state.channels.CCHANNEL123).toMatchObject({
+      channel_id: "CCHANNEL123",
+      network_name: "testnet",
+      network_passphrase: "Test SDF Network ; September 2015",
+      source_account: keypair.publicKey(),
+      secret_ref: "keychain://walleterm-test/default_payer",
+      cumulative_amount: "200",
+      last_voucher_amount: "200",
+      last_voucher_signature: "a".repeat(128),
+      lifecycle_state: "open",
+    });
   });
 
   it("uses experimental x402 channel flow when --x402-scheme channel is selected", async () => {

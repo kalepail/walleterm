@@ -10,6 +10,8 @@ const mocks = {
   mockLoadRuntimeSigners: vi.fn(),
   mockParseInputFile: vi.fn(),
   mockResolveAccountForCommand: vi.fn(),
+  mockReviewConfiguredInput: vi.fn(),
+  mockSignConfiguredInput: vi.fn(),
   mockSignInput: vi.fn(),
   mockWriteOutput: vi.fn(),
   mockLoadConfig: vi.fn(),
@@ -21,8 +23,7 @@ const mocks = {
   mockSetupOnePasswordForWallet: vi.fn(),
   mockGenerateSshAgentKey: vi.fn(),
   mockSetupSshAgentForWallet: vi.fn(),
-  mockSubmitTxXdrViaRpc: vi.fn(),
-  mockSubmitViaChannels: vi.fn(),
+  mockSubmitConfiguredInput: vi.fn(),
   mockBuildSignerMutationBundle: vi.fn(),
   mockCreateWalletDeployTx: vi.fn(),
   mockDiscoverContractsByCredentialId: vi.fn(),
@@ -45,6 +46,8 @@ const {
   mockLoadRuntimeSigners,
   mockParseInputFile,
   mockResolveAccountForCommand,
+  mockReviewConfiguredInput,
+  mockSignConfiguredInput,
   mockSignInput,
   mockLoadConfig,
   mockResolveAccount,
@@ -55,8 +58,7 @@ const {
   mockSetupOnePasswordForWallet,
   mockGenerateSshAgentKey,
   mockSetupSshAgentForWallet,
-  mockSubmitTxXdrViaRpc,
-  mockSubmitViaChannels,
+  mockSubmitConfiguredInput,
   mockBuildSignerMutationBundle,
   mockCreateWalletDeployTx,
   mockDiscoverContractsByCredentialId,
@@ -79,6 +81,8 @@ vi.mock("../../src/core.js", () => ({
   loadRuntimeSigners: mocks.mockLoadRuntimeSigners,
   parseInputFile: mocks.mockParseInputFile,
   resolveAccountForCommand: mocks.mockResolveAccountForCommand,
+  reviewConfiguredInput: mocks.mockReviewConfiguredInput,
+  signConfiguredInput: mocks.mockSignConfiguredInput,
   signInput: mocks.mockSignInput,
   writeOutput: mocks.mockWriteOutput,
 }));
@@ -105,8 +109,7 @@ vi.mock("../../src/ssh-agent-setup.js", () => ({
 }));
 
 vi.mock("../../src/submit.js", () => ({
-  submitTxXdrViaRpc: mocks.mockSubmitTxXdrViaRpc,
-  submitViaChannels: mocks.mockSubmitViaChannels,
+  submitConfiguredInput: mocks.mockSubmitConfiguredInput,
 }));
 
 vi.mock("../../src/wallet.js", () => ({
@@ -130,7 +133,10 @@ vi.mock("../../src/secrets.js", () => {
     }
     clearCache(): void {}
   }
-  return { SecretResolver };
+  return {
+    isSshAgentRef: (ref: string) => ref.startsWith("ssh-agent://"),
+    SecretResolver,
+  };
 });
 
 async function run(args: string[]) {
@@ -275,6 +281,36 @@ beforeEach(() => {
   mockInspectInput.mockReturnValue({ kind: "tx" });
   mockCanSignInput.mockReturnValue({ kind: "bundle", signableAuthEntries: 0 });
   mockListSignerConfig.mockReturnValue({ account: "treasury", external: [], delegated: [] });
+  mockReviewConfiguredInput.mockResolvedValue({
+    inspection: { kind: "tx" },
+    signability: { kind: "bundle", signableAuthEntries: 0 },
+    account: "treasury",
+    contract_id: CONTRACT_ID,
+    signer_reconciliation: {
+      mode: "subset",
+      ok: true,
+      configured: { delegated: [], external: [] },
+      onchain: { delegated: [], external: [] },
+      missing: { delegated: [], external: [] },
+      extra: { delegated: [], external: [] },
+    },
+    signer_reconciliation_error: null,
+  });
+  mockSignConfiguredInput.mockImplementation(async (request: any) => {
+    if (typeof request.input === "function") {
+      request.input({
+        contractId: CONTRACT_ID,
+        expirationLedger: 999,
+      });
+    }
+    return {
+      output: JSON.stringify({ auth: [] }),
+      report: { kind: "bundle", summary: { signed: 1, skipped: 0 }, details: [] },
+      account: "treasury",
+      contractId: CONTRACT_ID,
+      expirationLedger: 999,
+    };
+  });
 
   mockDefaultItemForNetwork.mockReturnValue("walleterm-testnet");
   mockDefaultServiceForNetwork.mockReturnValue("walleterm-testnet");
@@ -334,8 +370,14 @@ beforeEach(() => {
     config_snippet: "[[smart_accounts.<alias>.delegated_signers]]",
   });
 
-  mockSubmitTxXdrViaRpc.mockResolvedValue({ hash: "txhash" });
-  mockSubmitViaChannels.mockResolvedValue({ mode: "channels", ok: true });
+  mockSubmitConfiguredInput.mockImplementation(async (request: any) => {
+    if (request.trigger === "configured" && request.config.app.default_submit_mode !== "channels") {
+      return null;
+    }
+    return request.mode === "rpc"
+      ? { mode: "rpc", request_kind: "tx", status: "SUCCESS", hash: "txhash" }
+      : { mode: "channels", request_kind: "tx", status: "confirmed", hash: "txhash" };
+  });
 
   mockMakeDelegatedSignerScVal.mockReturnValue({ type: "delegated-scv" });
   mockMakeExternalSignerScVal.mockReturnValue({ type: "external-scv" });
@@ -375,8 +417,14 @@ afterAll(() => {
 describe("cli unit", () => {
   it("runs review command with signability details", async () => {
     mockParseInputFile.mockReturnValue({ kind: "bundle", auth: [] });
-    mockInspectInput.mockReturnValue({ kind: "bundle", operations: 1 });
-    mockCanSignInput.mockReturnValue({ kind: "bundle", signableAuthEntries: 2 });
+    mockReviewConfiguredInput.mockResolvedValueOnce({
+      inspection: { kind: "bundle", operations: 1 },
+      signability: { kind: "bundle", signableAuthEntries: 2 },
+      account: "treasury",
+      contract_id: CONTRACT_ID,
+      signer_reconciliation: { ok: true, mode: "subset" },
+      signer_reconciliation_error: null,
+    });
 
     const res = await run(["review", "--in", "in.txt", "--account", "treasury"]);
     expect(JSON.parse(res.stdout)).toMatchObject({
@@ -387,11 +435,22 @@ describe("cli unit", () => {
       signer_reconciliation: expect.objectContaining({ ok: true, mode: "subset" }),
       signer_reconciliation_error: null,
     });
+    expect(mockReviewConfiguredInput).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      input: { kind: "bundle", auth: [] },
+      network: undefined,
+      account: "treasury",
+    });
   });
 
   it("review surfaces signer reconciliation lookup failures without failing the command", async () => {
-    mockResolveIndexerUrl.mockImplementationOnce(() => {
-      throw new Error("missing indexer");
+    mockReviewConfiguredInput.mockResolvedValueOnce({
+      inspection: { kind: "bundle" },
+      signability: { kind: "bundle", signableAuthEntries: 0 },
+      account: "treasury",
+      contract_id: CONTRACT_ID,
+      signer_reconciliation: null,
+      signer_reconciliation_error: "missing indexer",
     });
 
     const res = await run(["review", "--in", "in.txt", "--account", "treasury"]);
@@ -401,7 +460,7 @@ describe("cli unit", () => {
     });
   });
 
-  it("review defaults signer reconciliation mode to subset when config omits it", async () => {
+  it("review passes the loaded config to the engine", async () => {
     mockLoadConfig.mockImplementation(() => ({
       app: {
         default_network: "testnet",
@@ -427,21 +486,24 @@ describe("cli unit", () => {
       },
     }));
 
-    const res = await run(["review", "--in", "in.txt", "--account", "treasury"]);
-    expect(JSON.parse(res.stdout)).toMatchObject({
-      signer_reconciliation: expect.objectContaining({ ok: true, mode: "subset" }),
-      signer_reconciliation_error: null,
-    });
-    expect(mockReconcileContractSigners).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      "subset",
+    await run(["review", "--in", "in.txt", "--account", "treasury"]);
+    expect(mockReviewConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          app: expect.objectContaining({ onchain_signer_mode: undefined }),
+        }),
+      }),
     );
   });
 
   it("review stringifies non-Error signer reconciliation failures", async () => {
-    mockResolveIndexerUrl.mockImplementationOnce(() => {
-      throw "plain-failure";
+    mockReviewConfiguredInput.mockResolvedValueOnce({
+      inspection: { kind: "bundle" },
+      signability: { kind: "bundle", signableAuthEntries: 0 },
+      account: "treasury",
+      contract_id: CONTRACT_ID,
+      signer_reconciliation: null,
+      signer_reconciliation_error: "plain-failure",
     });
 
     const res = await run(["review", "--in", "in.txt", "--account", "treasury"]);
@@ -453,8 +515,12 @@ describe("cli unit", () => {
 
   it("review command falls back to inspection-only output when no account resolves", async () => {
     mockParseInputFile.mockReturnValue({ kind: "bundle", auth: [] });
-    mockInspectInput.mockReturnValue({ kind: "bundle", operations: 1 });
-    mockResolveAccountForCommand.mockReturnValue(null);
+    mockReviewConfiguredInput.mockResolvedValueOnce({
+      inspection: { kind: "bundle", operations: 1 },
+      signability: null,
+      account: null,
+      note: "No smart account selected.",
+    });
 
     const res = await run(["review", "--in", "in.txt"]);
     expect(JSON.parse(res.stdout)).toMatchObject({
@@ -500,7 +566,9 @@ describe("cli unit", () => {
 
   it("sign command errors when account cannot be resolved", async () => {
     mockParseInputFile.mockReturnValue({ kind: "auth", auth: [] });
-    mockResolveAccountForCommand.mockReturnValue(null);
+    mockSignConfiguredInput.mockRejectedValueOnce(
+      new Error("No smart account selected. Pass --account <alias>."),
+    );
 
     await expect(
       run(["sign", "--in", "in.txt", "--out", "out.txt", "--ttl-seconds", "30"]),
@@ -508,14 +576,9 @@ describe("cli unit", () => {
   });
 
   it("sign command fails when strict onchain reconciliation fails", async () => {
-    mockReconcileContractSigners.mockReturnValueOnce({
-      mode: "exact",
-      ok: false,
-      configured: { delegated: ["GA"], external: [] },
-      onchain: { delegated: [], external: [] },
-      missing: { delegated: ["GA"], external: [] },
-      extra: { delegated: [], external: [] },
-    });
+    mockSignConfiguredInput.mockRejectedValueOnce(
+      new Error("Strict on-chain signer reconciliation failed"),
+    );
 
     await expect(run(["sign", "--in", "in.txt", "--out", "out.txt"])).rejects.toThrow(
       /Strict on-chain signer reconciliation failed/i,
@@ -523,20 +586,9 @@ describe("cli unit", () => {
   });
 
   it("sign command includes extra signer details in exact reconciliation mode", async () => {
-    mockReconcileContractSigners.mockReturnValueOnce({
-      mode: "exact",
-      ok: false,
-      configured: { delegated: [], external: [] },
-      onchain: {
-        delegated: [],
-        external: [{ verifier_contract_id: CONTRACT_ID, public_key_hex: "aa".repeat(32) }],
-      },
-      missing: { delegated: [], external: [] },
-      extra: {
-        delegated: [],
-        external: [{ verifier_contract_id: CONTRACT_ID, public_key_hex: "aa".repeat(32) }],
-      },
-    });
+    mockSignConfiguredInput.mockRejectedValueOnce(
+      new Error(`extra external=[${CONTRACT_ID}:${"aa".repeat(32)}]`),
+    );
 
     await expect(run(["sign", "--in", "in.txt", "--out", "out.txt"])).rejects.toThrow(
       /extra external=\[/i,
@@ -553,24 +605,25 @@ describe("cli unit", () => {
     ).rejects.toThrow(/Invalid integer value '30seconds'/i);
   });
 
-  it("submit rpc rejects non-tx input and succeeds for tx input", async () => {
-    mockParseInputFile.mockReturnValueOnce({ kind: "bundle", auth: [] });
-    await expect(run(["submit", "--in", "in.json", "--mode", "rpc"])).rejects.toThrow(
-      /RPC submission currently supports signed tx envelope input only/i,
-    );
-
-    mockParseInputFile.mockReturnValueOnce({
+  it("submit passes rpc mode to the submission interface and presents its result", async () => {
+    const input = {
       kind: "tx",
       envelope: { toXDR: () => "AAAA" },
-    });
+    };
+    mockParseInputFile.mockReturnValueOnce(input);
     const ok = await run(["submit", "--in", "in.xdr", "--mode", "rpc"]);
     expect(JSON.parse(ok.stdout)).toMatchObject({ mode: "rpc", request_kind: "tx" });
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({ input, mode: "rpc" }),
+    );
   });
 
   it("submit defaults to channels mode when --mode is omitted", async () => {
     mockParseInputFile.mockReturnValueOnce({ kind: "bundle", auth: [] });
     await run(["submit", "--in", "in.json"]);
-    expect(mockSubmitViaChannels).toHaveBeenCalledTimes(1);
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "channels" }),
+    );
   });
 
   it("submit forwards explicit channels overrides", async () => {
@@ -590,16 +643,16 @@ describe("cli unit", () => {
       "plugin-123",
     ]);
 
-    expect(mockSubmitViaChannels).toHaveBeenCalledWith(
-      { kind: "bundle", auth: [] },
-      expect.any(Object),
-      expect.any(Object),
-      {
-        channelsBaseUrl: "https://channels.example",
-        channelsApiKey: "api-key",
-        channelsApiKeyRef: "op://Private/item/channels_api_key",
-        pluginId: "plugin-123",
-      },
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: { kind: "bundle", auth: [] },
+        channels: {
+          channelsBaseUrl: "https://channels.example",
+          channelsApiKey: "api-key",
+          channelsApiKeyRef: "op://Private/item/channels_api_key",
+          pluginId: "plugin-123",
+        },
+      }),
     );
   });
 
@@ -940,6 +993,9 @@ describe("cli unit", () => {
         },
       },
     });
+    mockSignConfiguredInput.mockRejectedValueOnce(
+      new Error("Smart account 'treasury' belongs to network 'mainnet', not 'testnet'"),
+    );
 
     await expect(
       run([
@@ -966,6 +1022,7 @@ describe("cli unit", () => {
       },
       smart_accounts: {},
     });
+    mockSignConfiguredInput.mockRejectedValueOnce(new Error("Smart account 'missing' not found"));
 
     await expect(
       run([
@@ -1136,6 +1193,8 @@ describe("cli unit", () => {
         "out.json",
       ]),
     ).rejects.toThrow(/context-rule-id must be a non-negative integer/i);
+
+    expect(mockSignConfiguredInput).not.toHaveBeenCalled();
   });
 
   it("wallet signer add validates signer target shapes", async () => {
@@ -1256,18 +1315,10 @@ describe("cli unit", () => {
     });
 
     mockParseInputFile.mockReturnValue({ kind: "auth", auth: [] });
-    mockResolveAccountForCommand.mockReturnValue({
-      alias: "treasury",
-      account: {
-        network: "testnet",
-        contract_id: CONTRACT_ID,
-        external_signers: [],
-        delegated_signers: [],
-      },
-    });
-
     await run(["sign", "--in", "in.xdr", "--out", "out.xdr"]);
-    expect(mockComputeExpirationLedger).toHaveBeenCalledWith(expect.any(Object), 30, 6, undefined);
+    expect(mockSignConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({ ttlSeconds: undefined, latestLedger: undefined }),
+    );
 
     await run([
       "wallet",
@@ -1282,11 +1333,8 @@ describe("cli unit", () => {
       "--out",
       "out.json",
     ]);
-    expect(mockComputeExpirationLedger).toHaveBeenLastCalledWith(
-      expect.any(Object),
-      30,
-      6,
-      undefined,
+    expect(mockSignConfiguredInput).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ttlSeconds: undefined, latestLedger: undefined }),
     );
   });
 
@@ -1403,7 +1451,13 @@ describe("cli unit", () => {
     ]);
 
     expect(JSON.parse(out.stdout)).toMatchObject({ submitted: true });
-    expect(mockSubmitTxXdrViaRpc).toHaveBeenCalled();
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: { kind: "signed-tx", xdr: "AAAA" },
+        mode: "rpc",
+        trigger: "always",
+      }),
+    );
   });
 
   it("wallet create accepts valid external-ed25519 tuples and defaults submit mode to channels", async () => {
@@ -1423,7 +1477,9 @@ describe("cli unit", () => {
     ]);
 
     expect(mockMakeExternalSignerScVal).toHaveBeenCalledTimes(1);
-    expect(mockSubmitViaChannels).toHaveBeenCalledTimes(1);
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: undefined, trigger: "always" }),
+    );
     expect(JSON.parse(out.stdout)).toMatchObject({ submitted: true });
   });
 
@@ -1591,7 +1647,9 @@ describe("cli unit", () => {
       "out.xdr",
     ]);
 
-    expect(mockSubmitViaChannels).toHaveBeenCalled();
+    expect(mockSubmitConfiguredInput).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: "configured" }),
+    );
     expect(JSON.parse(out.stdout)).toMatchObject({ submitted: true });
   });
 });

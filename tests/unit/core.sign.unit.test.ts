@@ -141,6 +141,64 @@ describe("core sign", () => {
     expect(out.report.summary.skipped).toBeGreaterThanOrEqual(3);
   });
 
+  it("shares signer-map decisions while preserving review and signing outcomes", async () => {
+    const external = Keypair.random();
+    const missingDelegated = Keypair.random().publicKey();
+    const verifier = StrKey.encodeContract(Buffer.alloc(32, 19));
+    const publicKeyHex = Buffer.from(external.rawPublicKey()).toString("hex");
+    const runtime = makeRuntimeSigners({
+      external: [
+        {
+          kind: "external",
+          name: "local-external",
+          verifierContractId: verifier,
+          publicKeyHex,
+          signer: new KeypairSigner(external),
+        },
+      ],
+    });
+    const entry = makeAddressEntry(
+      CONTRACT,
+      xdr.ScVal.scvVec([
+        xdr.ScVal.scvMap([
+          new xdr.ScMapEntry({
+            key: signerKeyExternal(verifier, publicKeyHex),
+            val: xdr.ScVal.scvBytes(Buffer.alloc(0)),
+          }),
+          new xdr.ScMapEntry({
+            key: signerKeyDelegated(missingDelegated),
+            val: xdr.ScVal.scvBytes(Buffer.alloc(0)),
+          }),
+        ]),
+      ]),
+    );
+    const context = makeContext({ runtimeSigners: runtime });
+
+    const review = canSignInput({ kind: "auth", auth: [entry] }, context) as {
+      signableAuthEntries: number;
+      auth: Array<{ signable: boolean; reason: string }>;
+    };
+    const signed = await signInput({ kind: "auth", auth: [entry] }, context);
+
+    expect(review).toMatchObject({
+      signableAuthEntries: 1,
+      auth: [{ signable: true, reason: "matching external signer key" }],
+    });
+    expect(signed.report.summary).toEqual({ signed: 1, skipped: 1 });
+    expect(signed.report.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "signed",
+          reason: "signed external signer local-external",
+        }),
+        expect.objectContaining({
+          action: "skipped",
+          reason: `no local key for delegated signer ${missingDelegated}`,
+        }),
+      ]),
+    );
+  });
+
   it("signInput throws on malformed smart-account signature map", async () => {
     const malformed = makeAddressEntry(CONTRACT, xdr.ScVal.scvMap([]));
     await expect(

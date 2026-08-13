@@ -33,6 +33,7 @@ import type {
   X402ChannelFallbackResult,
   X402ChannelResult,
 } from "./x402-channel/types.js";
+import { enforcePaymentAmount } from "./payment-amount-policy.js";
 
 export { resolveX402ChannelStatePath } from "./x402-channel/storage.js";
 export type {
@@ -44,20 +45,8 @@ export type {
 
 function parseNonNegativeBigInt(value: string | undefined, label: string): bigint | undefined {
   if (value === undefined) return undefined;
-  if (!/^[0-9]+$/.test(value)) {
-    throw new Error(`${label} must be a non-negative integer string`);
-  }
+  enforcePaymentAmount({ amount: value, amountLabel: label, grammar: "integer" });
   return BigInt(value);
-}
-
-function amountExceedsCap(amount: string, max: string | undefined): boolean {
-  if (!max) return false;
-  const amountNum = Number(amount);
-  const maxNum = Number(max);
-  if (!Number.isFinite(amountNum) || !Number.isFinite(maxNum)) {
-    return false;
-  }
-  return amountNum > maxNum;
 }
 
 function writeBigInt128BE(buf: Buffer, value: bigint, offset: number): void {
@@ -106,12 +95,15 @@ function deriveDemoChannelId(commitmentSigner: Signer): string {
 
 async function sendInitialRequest(
   opts: X402ChannelExecuteOptions,
+  initialResponse?: Awaited<ReturnType<X402ChannelExecuteOptions["fetchFn"]>>,
 ): Promise<{ response: Response; bytes: Uint8Array; bodyJson: unknown }> {
-  const response = await opts.fetchFn(opts.url, {
-    method: opts.method ?? "GET",
-    headers: opts.headers,
-    body: opts.body,
-  });
+  const response =
+    initialResponse ??
+    (await opts.fetchFn(opts.url, {
+      method: opts.method ?? "GET",
+      headers: opts.headers,
+      body: opts.body,
+    }));
   const bytes = new Uint8Array(await response.arrayBuffer());
   return { response, bytes, bodyJson: parseResponseBody(bytes) };
 }
@@ -223,12 +215,6 @@ async function executeStateChannelRequest(
     opts.channelConfig?.max_deposit_amount,
     "payments.x402.channel.max_deposit_amount",
   );
-  if (amountExceedsCap(offer.price, opts.maxPaymentAmount) && !opts.yes) {
-    throw new Error(
-      `Payment amount ${offer.price} exceeds configured max_payment_amount ${opts.maxPaymentAmount}. Use --yes to override.`,
-    );
-  }
-
   if (
     current &&
     current.lifecycle_state === "open" &&
@@ -244,16 +230,15 @@ async function executeStateChannelRequest(
       "x402 channel deposit is required. Pass --x402-channel-deposit, configure payments.x402.channel.default_deposit, or rely on a server suggestedDeposit.",
     );
   }
-  if (
-    openRequired &&
-    deposit !== undefined &&
-    maxDepositAmount !== undefined &&
-    deposit > maxDepositAmount &&
-    !opts.yes
-  ) {
-    throw new Error(
-      `Channel deposit ${deposit.toString()} exceeds configured max_deposit_amount ${maxDepositAmount.toString()}. Use --yes to override.`,
-    );
+  if (openRequired && deposit !== undefined && maxDepositAmount !== undefined) {
+    enforcePaymentAmount({
+      amount: deposit.toString(),
+      amountLabel: "Channel deposit",
+      grammar: "integer",
+      maximum: maxDepositAmount.toString(),
+      maximumLabel: "max_deposit_amount",
+      allowAboveMaximum: opts.yes,
+    });
   }
 
   let stored = current;
@@ -449,15 +434,15 @@ async function executeDemoChannelRequest(
     opts.channelConfig?.max_deposit_amount,
     "payments.x402.channel.max_deposit_amount",
   );
-  if (maxDepositAmount !== undefined && deposit > maxDepositAmount && !opts.yes) {
-    throw new Error(
-      `Channel deposit ${deposit.toString()} exceeds configured max_deposit_amount ${maxDepositAmount.toString()}. Use --yes to override.`,
-    );
-  }
-  if (amountExceedsCap(offer.price, opts.maxPaymentAmount) && !opts.yes) {
-    throw new Error(
-      `Payment amount ${offer.price} exceeds configured max_payment_amount ${opts.maxPaymentAmount}. Use --yes to override.`,
-    );
+  if (maxDepositAmount !== undefined) {
+    enforcePaymentAmount({
+      amount: deposit.toString(),
+      amountLabel: "Channel deposit",
+      grammar: "integer",
+      maximum: maxDepositAmount.toString(),
+      maximumLabel: "max_deposit_amount",
+      allowAboveMaximum: opts.yes,
+    });
   }
 
   const stored =
@@ -562,8 +547,9 @@ async function executeDemoChannelRequest(
 
 export async function executeX402ChannelRequest(
   opts: X402ChannelExecuteOptions,
+  initialResponse?: Awaited<ReturnType<X402ChannelExecuteOptions["fetchFn"]>>,
 ): Promise<X402ChannelResult | X402ChannelFallbackResult> {
-  const { response, bytes, bodyJson } = await sendInitialRequest(opts);
+  const { response, bytes, bodyJson } = await sendInitialRequest(opts, initialResponse);
   if (response.status !== 402) {
     return {
       kind: "channel",
@@ -599,6 +585,15 @@ export async function executeX402ChannelRequest(
   }
 
   const offer = normalizeChannelOffer(accepted);
+  enforcePaymentAmount({
+    amount: offer.price,
+    amountLabel: "Payment amount",
+    grammar: "integer",
+    maximum: opts.maxPaymentAmount,
+    maximumGrammar: "decimal",
+    maximumLabel: "max_payment_amount",
+    allowAboveMaximum: opts.yes,
+  });
   const statePath =
     opts.statePathOverride ?? resolveX402ChannelStatePath(opts.configPath, opts.channelConfig);
   const channelContextKey = makeChannelContextKey(

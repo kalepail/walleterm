@@ -1,6 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { Keypair, hash, xdr } from "@stellar/stellar-sdk";
-import { KeypairSigner, SshAgentSigner, createSshAgentSigner } from "../../src/signer.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Keypair, Networks, hash, xdr } from "@stellar/stellar-sdk";
+import type { SecretResolver } from "../../src/secrets.js";
+import {
+  KeypairSigner,
+  SshAgentSigner,
+  isMppPaymentSigner,
+  requireKeypairSigner,
+  resolveSigner,
+} from "../../src/signer.js";
 import { makeFakeSshAgentFixture, type FakeSshAgentFixture } from "../helpers/fake-ssh-agent.js";
 
 function makeTxLike(): { hash(): Buffer; signatures: xdr.DecoratedSignature[] } {
@@ -69,6 +76,19 @@ describe("KeypairSigner", () => {
     const txHash = txLike.hash();
     expect(keypair.verify(txHash, Buffer.from(decorated.signature()))).toBe(true);
     expect(Buffer.from(decorated.hint()).equals(signer.signatureHint())).toBe(true);
+  });
+
+  it("provides x402 auth-entry signing", async () => {
+    const authEntry = Buffer.from("keypair-auth-entry");
+    const authSigner = signer.authEntrySigner(Networks.TESTNET);
+
+    const signed = await authSigner.signAuthEntry(authEntry.toString("base64"));
+
+    expect(authSigner.address).toBe(keypair.publicKey());
+    expect(signed.signerAddress).toBe(keypair.publicKey());
+    expect(keypair.verify(hash(authEntry), Buffer.from(signed.signedAuthEntry, "base64"))).toBe(
+      true,
+    );
   });
 });
 
@@ -158,9 +178,24 @@ describe("SshAgentSigner", () => {
     expect(fixture.keypair.verify(txHash, Buffer.from(decorated.signature()))).toBe(true);
     expect(Buffer.from(decorated.hint()).equals(signer.signatureHint())).toBe(true);
   });
+
+  it("provides x402 auth-entry signing", async () => {
+    fixture = await makeFakeSshAgentFixture();
+    const signer = await buildSshAgentSigner(fixture);
+    const authEntry = Buffer.from("ssh-agent-auth-entry");
+    const authSigner = signer.authEntrySigner(Networks.TESTNET);
+
+    const signed = await authSigner.signAuthEntry(authEntry.toString("base64"));
+
+    expect(authSigner.address).toBe(fixture.stellarAddress);
+    expect(signed.signerAddress).toBe(fixture.stellarAddress);
+    expect(
+      fixture.keypair.verify(hash(authEntry), Buffer.from(signed.signedAuthEntry, "base64")),
+    ).toBe(true);
+  });
 });
 
-describe("createSshAgentSigner()", () => {
+describe("resolveSigner()", () => {
   let fixture: FakeSshAgentFixture;
 
   afterEach(async () => {
@@ -169,33 +204,71 @@ describe("createSshAgentSigner()", () => {
     }
   });
 
-  it("creates signer from valid ssh-agent:// ref using fake agent", async () => {
+  it("resolves provider-backed seeds and exposes their signer capabilities", async () => {
+    const keypair = Keypair.random();
+    const resolve = vi.fn().mockResolvedValue(keypair.secret());
+    const resolver = { resolve } as unknown as SecretResolver;
+
+    const signer = await resolveSigner("keychain://wallet/signer", resolver);
+
+    expect(resolve).toHaveBeenCalledWith("keychain://wallet/signer");
+    expect(signer.publicKey()).toBe(keypair.publicKey());
+    expect(isMppPaymentSigner(signer)).toBe(true);
+    const keypairSigner = requireKeypairSigner(signer, "keypair required");
+    expect(keypairSigner.secretSeed()).toBe(keypair.secret());
+    expect(keypairSigner.keypair().publicKey()).toBe(keypair.publicKey());
+  });
+
+  it("maps invalid provider values to the caller's error", async () => {
+    const resolver = {
+      resolve: vi.fn().mockResolvedValue("not-a-seed"),
+    } as unknown as SecretResolver;
+
+    await expect(
+      resolveSigner("keychain://wallet/signer", resolver, "credential must be a seed"),
+    ).rejects.toThrow("credential must be a seed");
+  });
+
+  it("preserves provider errors", async () => {
+    const resolver = {
+      resolve: vi.fn().mockRejectedValue(new Error("provider unavailable")),
+    } as unknown as SecretResolver;
+
+    await expect(resolveSigner("keychain://wallet/signer", resolver)).rejects.toThrow(
+      "provider unavailable",
+    );
+  });
+
+  it("resolves ssh-agent refs without calling the secret resolver", async () => {
     fixture = await makeFakeSshAgentFixture();
     const ref = `ssh-agent://custom/${fixture.stellarAddress}?socket=${encodeURIComponent(fixture.socketPath)}`;
+    const resolve = vi.fn();
 
-    const signer = await createSshAgentSigner(ref);
+    const signer = await resolveSigner(ref, { resolve } as unknown as SecretResolver);
 
     expect(signer).toBeInstanceOf(SshAgentSigner);
     expect(signer.publicKey()).toBe(fixture.stellarAddress);
     expect(signer.rawPublicKey().length).toBe(32);
     expect(signer.rawPublicKey().equals(Buffer.from(fixture.keypair.rawPublicKey()))).toBe(true);
+    expect(resolve).not.toHaveBeenCalled();
 
-    // Verify it can actually sign
     const data = hash(Buffer.from("create-signer-test"));
     const sig = await signer.sign(data);
     expect(sig.length).toBe(64);
     expect(fixture.keypair.verify(data, sig)).toBe(true);
+
+    expect(isMppPaymentSigner(signer)).toBe(false);
+    expect(() => requireKeypairSigner(signer, "keypair required")).toThrow("keypair required");
   });
 
-  it("throws when key not found in agent", async () => {
+  it("reports a missing ssh-agent identity", async () => {
     fixture = await makeFakeSshAgentFixture();
-    // Use a different random keypair's address that the agent doesn't know about
     const unknownAddress = Keypair.random().publicKey();
     const ref = `ssh-agent://custom/${unknownAddress}?socket=${encodeURIComponent(fixture.socketPath)}`;
 
-    await expect(createSshAgentSigner(ref)).rejects.toThrow(
-      /No Ed25519 key matching .+ found in SSH agent/,
-    );
+    await expect(
+      resolveSigner(ref, { resolve: vi.fn() } as unknown as SecretResolver),
+    ).rejects.toThrow(/No Ed25519 key matching .+ found in SSH agent/);
   });
 });
 

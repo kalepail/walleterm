@@ -249,22 +249,104 @@ describe("executeMppRequest", () => {
     ).rejects.toThrow(/cannot be combined with an existing Authorization header/i);
   });
 
-  it("enforces max payment amount unless --yes is passed", async () => {
-    const challenge = makeChallenge();
-    const fetchFn = mockFetch(402, "payment required", {
-      "WWW-Authenticate": Challenge.serialize(challenge),
-    });
+  it.each([
+    ["charge", false],
+    ["charge", true],
+    ["channel", false],
+    ["channel", true],
+  ] as const)(
+    "rejects malformed %s amounts before credentials when yes is %s",
+    async (intent, yes) => {
+      const challenge = makeChallenge(intent);
+      challenge.request.amount = "1e6";
+      const method = makeMethod(intent);
+      const fetchFn = mockFetch(402, "payment required", {
+        "WWW-Authenticate": Challenge.serialize(challenge),
+      });
 
-    await expect(
-      executeMppRequest([makeMethod()], {
+      await expect(
+        executeMppRequest([method], {
+          url: "https://example.com/resource",
+          intent,
+          network: "testnet",
+          maxPaymentAmount: "1000000",
+          yes,
+          fetchFn,
+        }),
+      ).rejects.toThrow(/Payment amount must be a valid non-negative integer string/i);
+
+      expect(method.createCredential).not.toHaveBeenCalled();
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([false, true])(
+    "rejects malformed configured maxima before credentials when yes is %s",
+    async (yes) => {
+      const challenge = makeChallenge();
+      const method = makeMethod();
+      const fetchFn = mockFetch(402, "payment required", {
+        "WWW-Authenticate": Challenge.serialize(challenge),
+      });
+
+      await expect(
+        executeMppRequest([method], {
+          url: "https://example.com/resource",
+          intent: "charge",
+          network: "testnet",
+          maxPaymentAmount: "1e6",
+          yes,
+          fetchFn,
+        }),
+      ).rejects.toThrow(/max_payment_amount must be a valid non-negative decimal string/i);
+
+      expect(method.createCredential).not.toHaveBeenCalled();
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["charge", "channel"] as const)(
+    "enforces the exact max payment amount for %s unless --yes is passed",
+    async (intent) => {
+      const challenge = makeChallenge(intent);
+      challenge.request.amount = "9007199254740993";
+      const method = makeMethod(intent);
+      const fetchFn = mockFetch(402, "payment required", {
+        "WWW-Authenticate": Challenge.serialize(challenge),
+      });
+
+      await expect(
+        executeMppRequest([method], {
+          url: "https://example.com/resource",
+          intent,
+          network: "testnet",
+          maxPaymentAmount: "9007199254740992",
+          fetchFn,
+        }),
+      ).rejects.toThrow(/exceeds configured max_payment_amount/i);
+
+      const yesFetch = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("payment required", {
+            status: 402,
+            headers: { "WWW-Authenticate": Challenge.serialize(challenge) },
+          }),
+        )
+        .mockResolvedValueOnce(new Response("paid", { status: 200 }));
+
+      const result = await executeMppRequest([method], {
         url: "https://example.com/resource",
-        intent: "charge",
+        intent,
         network: "testnet",
-        maxPaymentAmount: "50",
-        fetchFn,
-      }),
-    ).rejects.toThrow(/exceeds configured max_payment_amount/i);
-  });
+        maxPaymentAmount: "9007199254740992",
+        yes: true,
+        fetchFn: yesFetch,
+      });
+
+      expect(result.paid).toBe(true);
+    },
+  );
 
   it("errors when no advertised challenge matches the requested intent", async () => {
     const fetchFn = mockFetch(402, "payment required", {

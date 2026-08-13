@@ -1,6 +1,5 @@
-import { Keypair } from "@stellar/stellar-sdk";
-import { isSshAgentRef, SecretResolver } from "../secrets.js";
-import { type Signer, KeypairSigner, createSshAgentSigner } from "../signer.js";
+import { SecretResolver } from "../secrets.js";
+import { resolveSigner, type Signer } from "../signer.js";
 import type {
   AccountRef,
   DelegatedSignerConfig,
@@ -28,16 +27,6 @@ export function compositeExternalKey(verifierContractId: string, publicKeyHex: s
 
 export function normalizeHex(hex: string): string {
   return hex.toLowerCase().replace(/^0x/, "");
-}
-
-function assertSeed(secret: string, label: string): Keypair {
-  let keypair: Keypair;
-  try {
-    keypair = Keypair.fromSecret(secret);
-  } catch {
-    throw new Error(`${label} must resolve to a valid Stellar secret seed (S...)`);
-  }
-  return keypair;
 }
 
 function loadExternalSigner(row: ExternalSignerConfig, signer: Signer): RuntimeExternalSigner {
@@ -74,19 +63,6 @@ function loadDelegatedSigner(row: DelegatedSignerConfig, signer: Signer): Runtim
   };
 }
 
-async function resolveSignerFromRef(
-  ref: string,
-  label: string,
-  resolver: SecretResolver,
-): Promise<Signer> {
-  if (isSshAgentRef(ref)) {
-    return createSshAgentSigner(ref);
-  }
-  const seed = await resolver.resolve(ref);
-  const keypair = assertSeed(seed, label);
-  return new KeypairSigner(keypair);
-}
-
 export async function loadRuntimeSigners(
   accountRef: AccountRef | null,
   resolver: SecretResolver,
@@ -101,20 +77,20 @@ export async function loadRuntimeSigners(
 
   for (const row of account.external_signers ?? []) {
     if (!row.enabled) continue;
-    const signer = await resolveSignerFromRef(
+    const signer = await resolveSigner(
       row.secret_ref,
-      `External signer '${row.name}' in account '${alias}'`,
       resolver,
+      `External signer '${row.name}' in account '${alias}' must resolve to a valid Stellar secret seed (S...)`,
     );
     external.push(loadExternalSigner(row, signer));
   }
 
   for (const row of account.delegated_signers ?? []) {
     if (!row.enabled) continue;
-    const signer = await resolveSignerFromRef(
+    const signer = await resolveSigner(
       row.secret_ref,
-      `Delegated signer '${row.name}' in account '${alias}'`,
       resolver,
+      `Delegated signer '${row.name}' in account '${alias}' must resolve to a valid Stellar secret seed (S...)`,
     );
     delegated.push(loadDelegatedSigner(row, signer));
   }

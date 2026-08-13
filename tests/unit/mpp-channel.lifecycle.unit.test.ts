@@ -42,7 +42,7 @@ import {
   sendAndPollTransaction,
   simulateGetter,
 } from "../../src/mpp-channel/rpc.js";
-import { resolveStoredChannel, upsertStoredChannel } from "../../src/mpp-channel/storage.js";
+import { applyMppChannelStateChange, resolveStoredChannel } from "../../src/mpp-channel/storage.js";
 import { close as closeChannelOnChain } from "stellar-mpp-sdk/channel/server";
 
 function makeStatePath(): string {
@@ -112,23 +112,28 @@ describe("mpp-channel lifecycle", () => {
     const keypair = Keypair.random();
     const statePath = makeStatePath();
     const channelId = StrKey.encodeContract(Buffer.alloc(32, 6));
-    upsertStoredChannel(statePath, {
-      channel_id: channelId,
-      network_name: "testnet",
-      network_passphrase: Networks.TESTNET,
-      source_account: keypair.publicKey(),
-      secret_ref: "keychain://payer",
+    applyMppChannelStateChange(statePath, {
+      type: "opened",
+      channelId,
+      networkName: "testnet",
+      networkPassphrase: Networks.TESTNET,
+      sourceAccount: keypair.publicKey(),
+      secretRef: "keychain://payer",
       deposit: "100",
-      cumulative_amount: "25",
-      last_voucher_amount: "25",
-      last_voucher_signature: "a".repeat(128),
-      refund_waiting_period: 24,
-      factory_contract_id: "CFACTORY",
-      token_contract_id: "CTOKEN",
+      refundWaitingPeriod: 24,
+      factoryContractId: "CFACTORY",
+      tokenContractId: "CTOKEN",
       recipient: Keypair.random().publicKey(),
-      lifecycle_state: "open",
-      opened_tx_hash: "tx-open",
-      updated_at: new Date().toISOString(),
+      txHash: "tx-open",
+    });
+    applyMppChannelStateChange(statePath, {
+      type: "voucher-remembered",
+      channelId,
+      networkName: "testnet",
+      networkPassphrase: Networks.TESTNET,
+      sourceAccount: keypair.publicKey(),
+      cumulativeAmount: "25",
+      signatureHex: "a".repeat(128),
     });
     sendAndPollTransactionMock.mockResolvedValue("tx-topup");
 
@@ -231,24 +236,174 @@ describe("mpp-channel lifecycle", () => {
     ).rejects.toThrow(/64-byte hex/i);
   });
 
+  it("rejects invalid state before any RPC submission", async () => {
+    const keypair = Keypair.random();
+    const statePath = makeStatePath();
+    const storeOpenChannel = (channelId: string) => {
+      applyMppChannelStateChange(statePath, {
+        type: "opened",
+        channelId,
+        networkName: "testnet",
+        networkPassphrase: Networks.TESTNET,
+        sourceAccount: keypair.publicKey(),
+        deposit: "1000",
+        refundWaitingPeriod: 24,
+        factoryContractId: "CFACTORY",
+        tokenContractId: "CTOKEN",
+        recipient: Keypair.random().publicKey(),
+        txHash: "tx-open",
+      });
+    };
+
+    const closingChannelId = StrKey.encodeContract(Buffer.alloc(32, 13));
+    storeOpenChannel(closingChannelId);
+    applyMppChannelStateChange(statePath, {
+      type: "close-started",
+      channelId: closingChannelId,
+      networkName: "testnet",
+      networkPassphrase: Networks.TESTNET,
+      sourceAccount: keypair.publicKey(),
+      txHash: "tx-close-start",
+    });
+
+    await expect(
+      topUpMppChannel({
+        rpcUrl: "https://rpc.example",
+        networkName: "testnet",
+        networkPassphrase: Networks.TESTNET,
+        keypair,
+        channelId: closingChannelId,
+        amount: 10n,
+        statePath,
+      }),
+    ).rejects.toThrow(/not allowed from lifecycle state 'closing'/);
+    await expect(
+      settleMppChannel({
+        rpcUrl: "https://rpc.example",
+        networkName: "testnet",
+        networkPassphrase: Networks.TESTNET,
+        keypair,
+        channelId: closingChannelId,
+        amount: 10n,
+        signatureHex: "a".repeat(128),
+        statePath,
+      }),
+    ).rejects.toThrow(/not allowed from lifecycle state 'closing'/);
+    await expect(
+      startMppChannelClose({
+        rpcUrl: "https://rpc.example",
+        networkName: "testnet",
+        networkPassphrase: Networks.TESTNET,
+        keypair,
+        channelId: closingChannelId,
+        statePath,
+      }),
+    ).rejects.toThrow(/not allowed from lifecycle state 'closing'/);
+
+    const openChannelId = StrKey.encodeContract(Buffer.alloc(32, 14));
+    storeOpenChannel(openChannelId);
+    await expect(
+      refundMppChannel({
+        rpcUrl: "https://rpc.example",
+        networkName: "testnet",
+        networkPassphrase: Networks.TESTNET,
+        keypair,
+        channelId: openChannelId,
+        statePath,
+      }),
+    ).rejects.toThrow(/not allowed from lifecycle state 'open'/);
+
+    const closedChannelId = StrKey.encodeContract(Buffer.alloc(32, 15));
+    storeOpenChannel(closedChannelId);
+    applyMppChannelStateChange(statePath, {
+      type: "closed",
+      channelId: closedChannelId,
+      networkPassphrase: Networks.TESTNET,
+      sourceAccount: keypair.publicKey(),
+      cumulativeAmount: "0",
+      signatureHex: "b".repeat(128),
+      txHash: "tx-close",
+    });
+    await expect(
+      closeMppChannel({
+        rpcUrl: "https://rpc.example",
+        networkPassphrase: Networks.TESTNET,
+        keypair,
+        channelId: closedChannelId,
+        amount: 0n,
+        signatureHex: "b".repeat(128),
+        statePath,
+      }),
+    ).rejects.toThrow(/not allowed from lifecycle state 'closed'/);
+
+    await expect(
+      topUpMppChannel({
+        rpcUrl: "https://rpc.example",
+        networkName: "testnet",
+        networkPassphrase: Networks.TESTNET,
+        keypair,
+        channelId: StrKey.encodeContract(Buffer.alloc(32, 16)),
+        amount: 10n,
+        statePath,
+      }),
+    ).rejects.toThrow(/does not exist/);
+
+    const regressionChannelId = StrKey.encodeContract(Buffer.alloc(32, 17));
+    storeOpenChannel(regressionChannelId);
+    applyMppChannelStateChange(statePath, {
+      type: "voucher-remembered",
+      channelId: regressionChannelId,
+      networkName: "testnet",
+      networkPassphrase: Networks.TESTNET,
+      sourceAccount: keypair.publicKey(),
+      cumulativeAmount: "100",
+      signatureHex: "c".repeat(128),
+    });
+    await expect(
+      settleMppChannel({
+        rpcUrl: "https://rpc.example",
+        networkName: "testnet",
+        networkPassphrase: Networks.TESTNET,
+        keypair,
+        channelId: regressionChannelId,
+        amount: 99n,
+        signatureHex: "d".repeat(128),
+        statePath,
+      }),
+    ).rejects.toThrow(/is below stored amount/);
+
+    expect(getAccountSpy).not.toHaveBeenCalled();
+    expect(prepareTransactionSpy).not.toHaveBeenCalled();
+    expect(sendAndPollTransactionMock).not.toHaveBeenCalled();
+    expect(closeChannelOnChainMock).not.toHaveBeenCalled();
+  });
+
   it("closes, settles, starts close, and refunds while updating stored state", async () => {
     const keypair = Keypair.random();
     const statePath = makeStatePath();
     const channelId = StrKey.encodeContract(Buffer.alloc(32, 12));
-    upsertStoredChannel(statePath, {
-      channel_id: channelId,
-      network_name: "testnet",
-      network_passphrase: Networks.TESTNET,
-      source_account: keypair.publicKey(),
-      secret_ref: "keychain://payer",
+    applyMppChannelStateChange(statePath, {
+      type: "opened",
+      channelId,
+      networkName: "testnet",
+      networkPassphrase: Networks.TESTNET,
+      sourceAccount: keypair.publicKey(),
+      secretRef: "keychain://payer",
       deposit: "1000",
-      cumulative_amount: "100",
-      last_voucher_amount: "100",
-      last_voucher_signature: "a".repeat(128),
-      refund_waiting_period: 24,
-      lifecycle_state: "open",
-      opened_tx_hash: "tx-open",
-      updated_at: new Date().toISOString(),
+      refundWaitingPeriod: 24,
+      factoryContractId: "CFACTORY",
+      tokenContractId: "CTOKEN",
+      recipient: Keypair.random().publicKey(),
+      txHash: "tx-open",
+    });
+    applyMppChannelStateChange(statePath, {
+      type: "voucher-remembered",
+      channelId,
+      networkName: "testnet",
+      networkPassphrase: Networks.TESTNET,
+      sourceAccount: keypair.publicKey(),
+      cumulativeAmount: "100",
+      signatureHex: "a".repeat(128),
     });
 
     sendAndPollTransactionMock
@@ -293,18 +448,34 @@ describe("mpp-channel lifecycle", () => {
     expect(closeResult.stored_channel.lifecycle_state).toBe("closed");
     expect(resolveStoredChannel(statePath, "testnet")).toBeNull();
 
-    upsertStoredChannel(statePath, {
-      ...closeResult.stored_channel,
-      network_name: "testnet",
-      lifecycle_state: "closing",
-      updated_at: new Date().toISOString(),
+    const refundChannelId = StrKey.encodeContract(Buffer.alloc(32, 18));
+    applyMppChannelStateChange(statePath, {
+      type: "opened",
+      channelId: refundChannelId,
+      networkName: "testnet",
+      networkPassphrase: Networks.TESTNET,
+      sourceAccount: keypair.publicKey(),
+      deposit: "1000",
+      refundWaitingPeriod: 24,
+      factoryContractId: "CFACTORY",
+      tokenContractId: "CTOKEN",
+      recipient: Keypair.random().publicKey(),
+      txHash: "tx-open-refund",
+    });
+    applyMppChannelStateChange(statePath, {
+      type: "close-started",
+      channelId: refundChannelId,
+      networkName: "testnet",
+      networkPassphrase: Networks.TESTNET,
+      sourceAccount: keypair.publicKey(),
+      txHash: "tx-close-start-refund",
     });
     const refundResult = await refundMppChannel({
       rpcUrl: "https://rpc.example",
       networkName: "testnet",
       networkPassphrase: Networks.TESTNET,
       keypair,
-      channelId,
+      channelId: refundChannelId,
       statePath,
     });
     expect(refundResult.stored_channel.lifecycle_state).toBe("refunded");

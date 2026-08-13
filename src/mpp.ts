@@ -1,6 +1,7 @@
 import { Challenge, Credential, Receipt } from "mppx";
 import { stellar as createMppChargeMethod } from "stellar-mpp-sdk/client";
 import { stellar as createMppChannelMethod } from "stellar-mpp-sdk/channel/client";
+import { enforcePaymentAmount } from "./payment-amount-policy.js";
 
 export type MppNetwork = "public" | "testnet";
 export type MppIntent = "charge" | "channel";
@@ -121,18 +122,6 @@ function normalizeChallengeNetwork(challenge: MppChallenge, network: MppNetwork)
   };
 }
 
-function amountExceedsCap(amount: string | undefined, max: string | undefined): boolean {
-  if (!amount || !max) return false;
-
-  const amountNum = Number(amount);
-  const maxNum = Number(max);
-  if (!Number.isFinite(amountNum) || !Number.isFinite(maxNum)) {
-    return false;
-  }
-
-  return amountNum > maxNum;
-}
-
 function hasAuthorizationHeader(headers: Record<string, string> | undefined): boolean {
   if (!headers) return false;
   return Object.keys(headers).some((key) => key.toLowerCase() === "authorization");
@@ -202,11 +191,15 @@ export async function executeMppRequest(
     };
   }
 
-  if (amountExceedsCap(challenge.request.amount, opts.maxPaymentAmount) && !opts.yes) {
-    throw new Error(
-      `Payment amount ${challenge.request.amount} exceeds configured max_payment_amount ${opts.maxPaymentAmount}. Use --yes to override.`,
-    );
-  }
+  enforcePaymentAmount({
+    amount: challenge.request.amount,
+    amountLabel: "Payment amount",
+    grammar: "integer",
+    maximum: opts.maxPaymentAmount,
+    maximumGrammar: "decimal",
+    maximumLabel: "max_payment_amount",
+    allowAboveMaximum: opts.yes,
+  });
 
   if (hasAuthorizationHeader(opts.headers)) {
     throw new Error("MPP payment flow cannot be combined with an existing Authorization header.");

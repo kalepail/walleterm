@@ -1,15 +1,13 @@
-import { Keypair, hash } from "@stellar/stellar-sdk";
-import { x402Client, x402HTTPClient } from "@x402/core/client";
 import type { Network, PaymentPayload, PaymentRequired, SettleResponse } from "@x402/core/types";
+import { x402Client, x402HTTPClient } from "@x402/core/client";
 import {
   ExactStellarScheme,
   STELLAR_PUBNET_CAIP2,
   STELLAR_TESTNET_CAIP2,
-  createEd25519Signer,
   type ClientStellarSigner,
 } from "@x402/stellar";
+import { enforcePaymentAmount } from "./payment-amount-policy.js";
 export type { ClientStellarSigner } from "@x402/stellar";
-import type { Signer } from "./signer.js";
 
 const PASSPHRASE_TO_X402_NETWORK = new Map<string, Network>([
   ["Test SDF Network ; September 2015", STELLAR_TESTNET_CAIP2 as Network],
@@ -22,22 +20,6 @@ export function passphraseToX402Network(passphrase: string): Network {
     throw new Error(`No x402 network mapping for passphrase: ${passphrase}`);
   }
   return network;
-}
-
-export function createWalletermSigner(keypair: Keypair, network: Network): ClientStellarSigner {
-  return createEd25519Signer(keypair.secret(), network);
-}
-
-export function createSshAgentX402Signer(signer: Signer): ClientStellarSigner {
-  const address = signer.publicKey();
-  return {
-    address,
-    async signAuthEntry(authEntry: string) {
-      const data = hash(Buffer.from(authEntry, "base64"));
-      const sig = await signer.sign(data);
-      return { signedAuthEntry: sig.toString("base64"), signerAddress: address };
-    },
-  };
 }
 
 export interface X402HttpHandler {
@@ -84,14 +66,24 @@ export interface X402Result {
   settlementError?: string;
 }
 
+export interface X402Response {
+  readonly status: number;
+  readonly headers: {
+    get(name: string): string | null;
+    entries(): Iterable<[string, string]>;
+  };
+  arrayBuffer(): Promise<ArrayBuffer>;
+}
+
 /* v8 ignore start -- command-layer tests cover these branches, but v8 branch accounting is noisy here */
 export async function executeX402Request(
   handler: X402HttpHandler,
   opts: X402FetchOptions,
+  initialResponse?: X402Response,
 ): Promise<X402Result> {
   const fetchFn = opts.fetchFn;
 
-  const initialResponse = await fetchFn(opts.url, {
+  initialResponse ??= await fetchFn(opts.url, {
     method: opts.method ?? "GET",
     headers: opts.headers,
     body: opts.body,
@@ -142,16 +134,15 @@ export async function executeX402Request(
 
   const accepted = stellarAccepts[0]!;
 
-  if (opts.maxPaymentAmount && !opts.yes) {
-    const amount = Number(accepted.amount);
-    const max = Number(opts.maxPaymentAmount);
-    /* v8 ignore next -- config validation already guarantees numeric max_payment_amount */
-    if (amount > max) {
-      throw new Error(
-        `Payment amount ${accepted.amount} exceeds configured max_payment_amount ${opts.maxPaymentAmount}. Use --yes to override.`,
-      );
-    }
-  }
+  enforcePaymentAmount({
+    amount: accepted.amount,
+    amountLabel: "Payment amount",
+    grammar: "integer",
+    maximum: opts.maxPaymentAmount,
+    maximumGrammar: "decimal",
+    maximumLabel: "max_payment_amount",
+    allowAboveMaximum: opts.yes,
+  });
 
   process.stderr.write(
     `x402: paying ${accepted.amount} via ${accepted.scheme} on ${accepted.network} to ${accepted.payTo}\n`,

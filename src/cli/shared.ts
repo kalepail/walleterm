@@ -20,16 +20,6 @@ export function requireNonNegativeInt(value: number | undefined, label: string):
   return value;
 }
 
-export function parseBigIntAmount(value: string, label: string): bigint {
-  try {
-    const parsed = BigInt(value);
-    if (parsed < 0n) throw new Error("negative");
-    return parsed;
-  } catch {
-    throw new Error(`${label} must be a non-negative integer string`);
-  }
-}
-
 export function credentialIdFromKeypair(keypair: Keypair): string {
   return Buffer.from(keypair.rawPublicKey()).toString("hex");
 }

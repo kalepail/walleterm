@@ -3,14 +3,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Account, Keypair, Networks, rpc, StrKey } from "@stellar/stellar-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WalletermConfig } from "../../src/config.js";
+import { executePaymentRequest } from "../../src/payments/index.js";
 import { KeypairSigner } from "../../src/signer.js";
 import { executeX402Payment } from "../../src/payments/x402.js";
+import { SecretResolver } from "../../src/secrets.js";
+
+const { createX402HttpHandlerMock } = vi.hoisted(() => ({
+  createX402HttpHandlerMock: vi.fn(),
+}));
+
+vi.mock("../../src/payments/mpp.js", () => ({
+  executeMppPayment: vi.fn(),
+}));
 
 vi.mock("../../src/x402.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/x402.js")>("../../src/x402.js");
   return {
+    ...actual,
     passphraseToX402Network: vi.fn(() => "stellar:testnet"),
-    createX402HttpHandler: vi.fn(() => ({})),
-    executeX402Request: vi.fn(),
+    createX402HttpHandler: createX402HttpHandlerMock,
   };
 });
 
@@ -181,5 +193,87 @@ describe("executeX402Payment", () => {
       }),
     );
     expect(fetchFn).toHaveBeenCalledTimes(3);
+  });
+
+  it("reuses the first 402 challenge when auto mode falls back to exact", async () => {
+    const payer = Keypair.random();
+    const paymentRequired = {
+      x402Version: 2,
+      resource: { url: "https://example.com/resource", mimeType: "text/plain" },
+      accepts: [
+        {
+          scheme: "exact",
+          network: "stellar:testnet" as const,
+          asset: StrKey.encodeContract(Buffer.alloc(32, 8)),
+          amount: "10",
+          payTo: Keypair.random().publicKey(),
+          maxTimeoutSeconds: 60,
+        },
+      ],
+    };
+    const paymentPayload = {
+      x402Version: 2,
+      resource: paymentRequired.resource,
+      accepted: paymentRequired.accepts[0]!,
+      payload: { signed: true },
+    };
+    createX402HttpHandlerMock.mockReturnValue({
+      getPaymentRequiredResponse: vi.fn(() => paymentRequired),
+      createPaymentPayload: vi.fn(async () => paymentPayload),
+      encodePaymentSignatureHeader: vi.fn(() => ({ "PAYMENT-SIGNATURE": "signed-payment" })),
+      getPaymentSettleResponse: vi.fn(() => ({ success: true, transaction: "tx-exact" })),
+    });
+
+    const fetchFn = vi
+      .fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(
+        makeJsonResponse(paymentRequired, 402, {
+          "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(paymentRequired), "utf8").toString(
+            "base64",
+          ),
+        }),
+      )
+      .mockImplementationOnce(async (_input, init) => {
+        expect(new Headers(init?.headers).get("PAYMENT-SIGNATURE")).toBe("signed-payment");
+        return makeBytesResponse("paid resource", 200, {
+          "PAYMENT-RESPONSE": "settled-payment",
+        });
+      });
+
+    const config: WalletermConfig = {
+      app: { default_network: "testnet" },
+      networks: {},
+      smart_accounts: {},
+      payments: {
+        default_protocol: "x402",
+        x402: {
+          default_payer_secret_ref: "test://payer",
+          default_scheme: "auto",
+        },
+      },
+    };
+    const resolver = new SecretResolver({
+      providers: [{ scheme: "test", resolve: async () => payer.secret() }],
+    });
+
+    const execution = await executePaymentRequest(
+      config,
+      "testnet",
+      { rpc_url: "https://rpc.example", network_passphrase: Networks.TESTNET },
+      resolver,
+      {
+        url: "https://example.com/resource",
+        method: "GET",
+        rawHeaders: [],
+        dryRun: false,
+        yes: false,
+        fetchFn,
+      },
+    );
+
+    expect(execution.result.scheme).toBe("exact");
+    expect(execution.result.paid).toBe(true);
+    expect(new TextDecoder().decode(execution.result.body)).toBe("paid resource");
+    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 });

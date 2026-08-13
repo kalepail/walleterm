@@ -1,6 +1,6 @@
-import { Keypair } from "@stellar/stellar-sdk";
 import type { MppIntent, NetworkConfig } from "../config.js";
 import { rememberMppVoucher } from "../mpp-channel.js";
+import { isMppPaymentSigner, type Signer } from "../signer.js";
 import {
   createMppClientMethod,
   executeMppRequest,
@@ -17,7 +17,7 @@ export interface ExecuteMppPaymentOptions {
   body?: string;
   networkName: string;
   network: NetworkConfig;
-  keypair: Keypair;
+  signer: Signer;
   secretRef: string;
   intent: MppIntent;
   sourceAccount?: string;
@@ -31,10 +31,16 @@ export interface ExecuteMppPaymentOptions {
 export async function executeMppPayment(
   opts: ExecuteMppPaymentOptions,
 ): Promise<PaymentExecutionResult> {
+  if (!isMppPaymentSigner(opts.signer)) {
+    throw new Error(
+      "MPP payments require a signer with secret-seed capability. The selected credential does not provide this capability.",
+    );
+  }
+
   const mppNetwork = passphraseToMppNetwork(opts.network.network_passphrase);
   const clientMethod = createMppClientMethod({
     intent: opts.intent,
-    secret: opts.keypair.secret(),
+    secret: opts.signer.secretSeed(),
     rpcUrl: opts.network.rpc_url,
     sourceAccount: opts.sourceAccount,
     chargeMode: "pull" as MppChargeMode,
@@ -72,7 +78,7 @@ export async function executeMppPayment(
         channelId: challengeRequest.channel,
         networkName: opts.networkName,
         networkPassphrase: opts.network.network_passphrase,
-        sourceAccount: opts.sourceAccount ?? opts.keypair.publicKey(),
+        sourceAccount: opts.sourceAccount ?? opts.signer.publicKey(),
         secretRef: opts.secretRef,
         cumulativeAmount: payload.amount,
         signatureHex: payload.signature,

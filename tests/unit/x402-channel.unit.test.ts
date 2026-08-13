@@ -193,6 +193,194 @@ describe("executeX402ChannelRequest", () => {
     expect(result.paymentRequired).toEqual(paymentRequired);
   });
 
+  it.each([
+    ["state", false],
+    ["state", true],
+    ["demo", false],
+    ["demo", true],
+  ] as const)(
+    "rejects malformed %s-channel payment amounts before channel work when yes is %s",
+    async (mode, yes) => {
+      const payer = new KeypairSigner(Keypair.random());
+      const paymentRequired = {
+        x402Version: 2,
+        resource: { url: "https://example.com/resource", mimeType: "text/plain" },
+        accepts: [
+          {
+            scheme: "channel",
+            network: "stellar:testnet" as const,
+            asset: StrKey.encodeContract(Buffer.alloc(32, 21)),
+            amount: "1e6",
+            payTo: payer.publicKey(),
+            maxTimeoutSeconds: 60,
+            extra:
+              mode === "state"
+                ? {
+                    channelContract: StrKey.encodeContract(Buffer.alloc(32, 22)),
+                    serverPublicKey: Keypair.random().publicKey(),
+                    suggestedDeposit: "1000000",
+                  }
+                : { suggestedDeposit: "1000000" },
+          },
+        ],
+      };
+      const fetchFn = vi.fn().mockResolvedValue(
+        makeJsonResponse(paymentRequired, 402, {
+          "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(paymentRequired), "utf8").toString(
+            "base64",
+          ),
+        }),
+      );
+
+      await expect(
+        executeX402ChannelRequest({
+          url: "https://example.com/resource",
+          method: "GET",
+          x402Network: "stellar:testnet",
+          networkName: "testnet",
+          networkPassphrase: Networks.TESTNET,
+          rpcUrl: "https://rpc.example",
+          configPath: makeTempConfigPath(),
+          schemeSelection: "channel",
+          payerKeypair: payer,
+          commitmentKeypair: new KeypairSigner(Keypair.random()),
+          maxPaymentAmount: "1000000",
+          yes,
+          fetchFn,
+        }),
+      ).rejects.toThrow(/Payment amount must be a valid non-negative integer string/i);
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(getAccountSpy).not.toHaveBeenCalled();
+      expect(prepareTransactionSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["state", false],
+    ["state", true],
+    ["demo", false],
+    ["demo", true],
+  ] as const)(
+    "rejects malformed %s-channel maxima before channel work when yes is %s",
+    async (mode, yes) => {
+      const payer = new KeypairSigner(Keypair.random());
+      const paymentRequired = {
+        x402Version: 2,
+        resource: { url: "https://example.com/resource", mimeType: "text/plain" },
+        accepts: [
+          {
+            scheme: "channel",
+            network: "stellar:testnet" as const,
+            asset: StrKey.encodeContract(Buffer.alloc(32, 25)),
+            amount: "10",
+            payTo: payer.publicKey(),
+            maxTimeoutSeconds: 60,
+            extra:
+              mode === "state"
+                ? {
+                    channelContract: StrKey.encodeContract(Buffer.alloc(32, 26)),
+                    serverPublicKey: Keypair.random().publicKey(),
+                    suggestedDeposit: "100",
+                  }
+                : { suggestedDeposit: "100" },
+          },
+        ],
+      };
+      const fetchFn = vi.fn().mockResolvedValue(
+        makeJsonResponse(paymentRequired, 402, {
+          "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(paymentRequired), "utf8").toString(
+            "base64",
+          ),
+        }),
+      );
+
+      await expect(
+        executeX402ChannelRequest({
+          url: "https://example.com/resource",
+          method: "GET",
+          x402Network: "stellar:testnet",
+          networkName: "testnet",
+          networkPassphrase: Networks.TESTNET,
+          rpcUrl: "https://rpc.example",
+          configPath: makeTempConfigPath(),
+          schemeSelection: "channel",
+          payerKeypair: payer,
+          commitmentKeypair: new KeypairSigner(Keypair.random()),
+          maxPaymentAmount: "1e6",
+          yes,
+          fetchFn,
+        }),
+      ).rejects.toThrow(/max_payment_amount must be a valid non-negative decimal string/i);
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(getAccountSpy).not.toHaveBeenCalled();
+      expect(prepareTransactionSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["state", false],
+    ["state", true],
+    ["demo", false],
+    ["demo", true],
+  ] as const)(
+    "rejects malformed %s-channel deposits before channel work when yes is %s",
+    async (mode, yes) => {
+      const payer = new KeypairSigner(Keypair.random());
+      const paymentRequired = {
+        x402Version: 2,
+        resource: { url: "https://example.com/resource", mimeType: "text/plain" },
+        accepts: [
+          {
+            scheme: "channel",
+            network: "stellar:testnet" as const,
+            asset: StrKey.encodeContract(Buffer.alloc(32, 23)),
+            amount: "10",
+            payTo: payer.publicKey(),
+            maxTimeoutSeconds: 60,
+            extra:
+              mode === "state"
+                ? {
+                    channelContract: StrKey.encodeContract(Buffer.alloc(32, 24)),
+                    serverPublicKey: Keypair.random().publicKey(),
+                  }
+                : {},
+          },
+        ],
+      };
+      const fetchFn = vi.fn().mockResolvedValue(
+        makeJsonResponse(paymentRequired, 402, {
+          "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(paymentRequired), "utf8").toString(
+            "base64",
+          ),
+        }),
+      );
+
+      await expect(
+        executeX402ChannelRequest({
+          url: "https://example.com/resource",
+          method: "GET",
+          x402Network: "stellar:testnet",
+          networkName: "testnet",
+          networkPassphrase: Networks.TESTNET,
+          rpcUrl: "https://rpc.example",
+          configPath: makeTempConfigPath(),
+          schemeSelection: "channel",
+          payerKeypair: payer,
+          commitmentKeypair: new KeypairSigner(Keypair.random()),
+          depositOverride: "1e6",
+          yes,
+          fetchFn,
+        }),
+      ).rejects.toThrow(/x402 channel deposit must be a valid non-negative integer string/i);
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(getAccountSpy).not.toHaveBeenCalled();
+      expect(prepareTransactionSpy).not.toHaveBeenCalled();
+    },
+  );
+
   it("opens then immediately pays when the real state-channel flow is selected", async () => {
     const payer = new KeypairSigner(Keypair.random());
     const commitment = new KeypairSigner(Keypair.random());
@@ -652,7 +840,7 @@ describe("executeX402ChannelRequest", () => {
     ).rejects.toThrow(/pay denied/i);
   });
 
-  it("executes demo-channel payments and reuses stored channel state", async () => {
+  it("uses --yes to override caps and reuse demo-channel state", async () => {
     const payer = new KeypairSigner(Keypair.random());
     const commitment = new KeypairSigner(Keypair.random());
     const configPath = makeTempConfigPath();
@@ -715,6 +903,9 @@ describe("executeX402ChannelRequest", () => {
       schemeSelection: "channel",
       payerKeypair: payer,
       commitmentKeypair: commitment,
+      channelConfig: { max_deposit_amount: "50" },
+      maxPaymentAmount: "5",
+      yes: true,
       fetchFn: makeFetch(),
     });
     expect(first.kind).toBe("channel");
@@ -740,6 +931,9 @@ describe("executeX402ChannelRequest", () => {
       schemeSelection: "channel",
       payerKeypair: payer,
       commitmentKeypair: commitment,
+      channelConfig: { max_deposit_amount: "50" },
+      maxPaymentAmount: "5",
+      yes: true,
       fetchFn: makeFetch(),
     });
     expect(second.kind).toBe("channel");
@@ -872,10 +1066,10 @@ describe("executeX402ChannelRequest", () => {
           scheme: "channel",
           network: "stellar:testnet",
           asset: StrKey.encodeContract(Buffer.alloc(32, 7)),
-          amount: "10",
+          amount: "9007199254740993",
           payTo: payer.publicKey(),
           maxTimeoutSeconds: 60,
-          extra: { suggestedDeposit: "100" },
+          extra: { suggestedDeposit: "9007199254741000" },
         },
       ],
     };
@@ -892,7 +1086,7 @@ describe("executeX402ChannelRequest", () => {
         schemeSelection: "channel",
         payerKeypair: payer,
         commitmentKeypair: commitment,
-        maxPaymentAmount: "5",
+        maxPaymentAmount: "9007199254740992",
         fetchFn: vi.fn().mockResolvedValue(
           makeJsonResponse(paymentRequired, 402, {
             "PAYMENT-REQUIRED": Buffer.from(JSON.stringify(paymentRequired), "utf8").toString(

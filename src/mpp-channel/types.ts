@@ -1,5 +1,7 @@
 import { Keypair } from "@stellar/stellar-sdk";
 
+export type MppChannelLifecycleState = "open" | "closing" | "closed" | "refunded";
+
 export interface StoredMppChannel {
   channel_id: string;
   network_name: string;
@@ -14,7 +16,7 @@ export interface StoredMppChannel {
   factory_contract_id?: string;
   token_contract_id?: string;
   recipient?: string;
-  lifecycle_state?: "open" | "closing" | "closed" | "refunded";
+  lifecycle_state?: MppChannelLifecycleState;
   opened_tx_hash?: string;
   last_topup_tx_hash?: string;
   last_settle_tx_hash?: string;
@@ -23,6 +25,120 @@ export interface StoredMppChannel {
   refund_tx_hash?: string;
   updated_at: string;
 }
+
+export type MppChannelStateTransition =
+  | { type: "opened"; channelId: string }
+  | { type: "topped-up" | "close-started" | "refunded"; channelId: string }
+  | {
+      type: "voucher-remembered" | "settled" | "closed";
+      channelId: string;
+      cumulativeAmount: string;
+    };
+
+export type MppChannelStateChange =
+  | {
+      type: "opened";
+      channelId: string;
+      networkName: string;
+      networkPassphrase: string;
+      sourceAccount: string;
+      secretRef?: string;
+      deposit: string;
+      refundWaitingPeriod: number;
+      factoryContractId: string;
+      tokenContractId: string;
+      recipient: string;
+      txHash: string;
+    }
+  | {
+      type: "topped-up";
+      channelId: string;
+      networkName: string;
+      networkPassphrase: string;
+      sourceAccount: string;
+      secretRef?: string;
+      amount: string;
+      txHash: string;
+    }
+  | {
+      type: "voucher-remembered";
+      channelId: string;
+      networkName: string;
+      networkPassphrase: string;
+      sourceAccount: string;
+      secretRef?: string;
+      cumulativeAmount: string;
+      signatureHex: string;
+    }
+  | {
+      type: "settled";
+      channelId: string;
+      networkName: string;
+      networkPassphrase: string;
+      cumulativeAmount: string;
+      signatureHex: string;
+      txHash: string;
+    }
+  | {
+      type: "close-started";
+      channelId: string;
+      networkName: string;
+      networkPassphrase: string;
+      sourceAccount: string;
+      txHash: string;
+    }
+  | {
+      type: "closed";
+      channelId: string;
+      networkPassphrase: string;
+      sourceAccount: string;
+      cumulativeAmount: string;
+      signatureHex: string;
+      txHash: string;
+    }
+  | {
+      type: "refunded";
+      channelId: string;
+      networkName: string;
+      networkPassphrase: string;
+      sourceAccount: string;
+      txHash: string;
+    };
+
+interface MppChannelLifecycleBaseRequest {
+  configPath: string;
+  network?: string;
+  channelId?: string;
+}
+
+export type MppChannelLifecycleRequest =
+  | (MppChannelLifecycleBaseRequest & {
+      action: "open";
+      secretRef?: string;
+      deposit?: string;
+      factoryContractId?: string;
+      tokenContractId?: string;
+      recipient?: string;
+      refundWaitingPeriod?: string;
+    })
+  | (MppChannelLifecycleBaseRequest & {
+      action: "topup";
+      secretRef?: string;
+      amount: string;
+    })
+  | (MppChannelLifecycleBaseRequest & {
+      action: "status";
+    })
+  | (MppChannelLifecycleBaseRequest & {
+      action: "settle" | "close";
+      secretRef?: string;
+      amount?: string;
+      signature?: string;
+    })
+  | (MppChannelLifecycleBaseRequest & {
+      action: "close-start" | "refund";
+      secretRef?: string;
+    });
 
 export interface MppOpenChannelOptions {
   rpcUrl: string;

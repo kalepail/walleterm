@@ -2,7 +2,6 @@ import { Keypair } from "@stellar/stellar-sdk";
 import type { Network, PaymentPayload, PaymentRequired, SettleResponse } from "@x402/core/types";
 import { describe, expect, it, vi } from "vitest";
 import {
-  createWalletermSigner,
   createX402HttpHandler,
   executeX402Request,
   passphraseToX402Network,
@@ -89,19 +88,13 @@ describe("passphraseToX402Network", () => {
   });
 });
 
-describe("createWalletermSigner", () => {
-  it("returns signer with correct address", () => {
-    const keypair = Keypair.random();
-    const signer = createWalletermSigner(keypair, "stellar:testnet" as Network);
-    expect(signer.address).toBe(keypair.publicKey());
-    expect(typeof signer.signAuthEntry).toBe("function");
-  });
-});
-
 describe("createX402HttpHandler", () => {
   it("creates handler with required methods", () => {
     const keypair = Keypair.random();
-    const signer = createWalletermSigner(keypair, "stellar:testnet" as Network);
+    const signer = {
+      address: keypair.publicKey(),
+      signAuthEntry: vi.fn(),
+    };
     const handler = createX402HttpHandler(signer, "stellar:testnet" as Network, "https://rpc.test");
     expect(typeof handler.getPaymentRequiredResponse).toBe("function");
     expect(typeof handler.createPaymentPayload).toBe("function");
@@ -289,9 +282,57 @@ describe("executeX402Request", () => {
     expect(retryHeaders["PAYMENT-SIGNATURE"]).toBe("base64encodedpayload");
   });
 
+  it.each([false, true])(
+    "rejects malformed payment amounts before signing when yes is %s",
+    async (yes) => {
+      const paymentRequired = makePaymentRequired("stellar:testnet", "exact");
+      paymentRequired.accepts[0]!.amount = "1e6";
+      const handler = makeMockHandler({
+        getPaymentRequiredResponse: vi.fn(() => paymentRequired),
+      });
+      const fetchFn = mockFetch(402, "{}", { "PAYMENT-REQUIRED": "base64stuff" });
+
+      await expect(
+        executeX402Request(handler, {
+          url: "https://example.com/resource",
+          x402Network: "stellar:testnet" as Network,
+          maxPaymentAmount: "1000000",
+          yes,
+          fetchFn,
+        }),
+      ).rejects.toThrow(/Payment amount must be a valid non-negative integer string/i);
+
+      expect(handler.createPaymentPayload).not.toHaveBeenCalled();
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([false, true])(
+    "rejects malformed configured maxima before signing when yes is %s",
+    async (yes) => {
+      const handler = makeMockHandler();
+      const fetchFn = mockFetch(402, "{}", { "PAYMENT-REQUIRED": "base64stuff" });
+
+      await expect(
+        executeX402Request(handler, {
+          url: "https://example.com/resource",
+          x402Network: "stellar:testnet" as Network,
+          maxPaymentAmount: "1e6",
+          yes,
+          fetchFn,
+        }),
+      ).rejects.toThrow(/max_payment_amount must be a valid non-negative decimal string/i);
+
+      expect(handler.createPaymentPayload).not.toHaveBeenCalled();
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("enforces max payment amount unless --yes is passed", async () => {
+    const paymentRequired = makePaymentRequired("stellar:testnet", "exact");
+    paymentRequired.accepts[0]!.amount = "9007199254740993";
     const handler = makeMockHandler({
-      getPaymentRequiredResponse: vi.fn(() => makePaymentRequired("stellar:testnet", "exact")),
+      getPaymentRequiredResponse: vi.fn(() => paymentRequired),
     });
     const fetchFn = mockFetch(402, "{}", { "PAYMENT-REQUIRED": "base64stuff" });
 
@@ -299,7 +340,7 @@ describe("executeX402Request", () => {
       executeX402Request(handler, {
         url: "https://example.com/resource",
         x402Network: "stellar:testnet" as Network,
-        maxPaymentAmount: "99999",
+        maxPaymentAmount: "9007199254740992",
         fetchFn,
       }),
     ).rejects.toThrow(/exceeds configured max_payment_amount/);
@@ -317,7 +358,7 @@ describe("executeX402Request", () => {
     const result = await executeX402Request(handler, {
       url: "https://example.com/resource",
       x402Network: "stellar:testnet" as Network,
-      maxPaymentAmount: "99999",
+      maxPaymentAmount: "9007199254740992",
       yes: true,
       fetchFn: yesFetch,
     });

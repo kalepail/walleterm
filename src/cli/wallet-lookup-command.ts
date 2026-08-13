@@ -1,8 +1,8 @@
 import { Command } from "commander";
-import { Keypair } from "@stellar/stellar-sdk";
 import { listSignerConfig } from "../core.js";
 import { loadConfig, resolveNetwork } from "../config.js";
 import { SecretResolver } from "../secrets.js";
+import { resolveSigner } from "../signer.js";
 import {
   discoverContractsByAddress,
   discoverContractsByCredentialId,
@@ -10,7 +10,6 @@ import {
   listContractSigners,
   resolveIndexerUrl,
 } from "../wallet.js";
-import { credentialIdFromKeypair } from "./shared.js";
 
 interface WalletLookupOpts {
   config: string;
@@ -139,16 +138,9 @@ export function registerWalletLookupCommand(wallet: Command): void {
 
       const resolver = new SecretResolver();
       try {
-        const secret = await resolver.resolve(opts.secretRef!);
-        let keypair: Keypair;
-        try {
-          keypair = Keypair.fromSecret(secret);
-        } catch {
-          throw new Error("secret-ref must resolve to a valid Stellar secret seed (S...)");
-        }
-
-        const signerAddress = keypair.publicKey();
-        const credentialId = credentialIdFromKeypair(keypair);
+        const signer = await resolveSigner(opts.secretRef!, resolver);
+        const signerAddress = signer.publicKey();
+        const credentialId = signer.rawPublicKey().toString("hex");
         const [delegated, external] = await Promise.all([
           discoverContractsByAddress(indexerUrl, signerAddress),
           discoverContractsByCredentialId(indexerUrl, credentialId),
