@@ -82,6 +82,8 @@ Contract verification:
 
 `src/core/signing-engine.ts` owns the configured review and signing workflows. It resolves the network and account, reconciles signers, loads runtime signers, and computes expiration ledgers. It delegates payload inspection and cryptographic signing to the smaller `src/core/*` modules. The CLI supplies command input and presents the returned result.
 
+`src/core/auth-entry.ts` owns auth-entry analysis. Review and signing use the same decision result, but they keep separate outcomes: review reports signability without mutation, while signing applies signatures or throws on malformed signature maps.
+
 ### 1) Envelope signing
 Given transaction envelope XDR:
 - Parse network-specific tx hash preimage.
@@ -137,6 +139,8 @@ Current signer reconciliation output includes:
 ## Credential Provider Integration
 Runtime secret resolution is provider-backed and ref-based.
 
+`src/signer.ts` owns signer resolution and exposes signer capabilities instead of provider-specific branches. Callers that need a raw keypair use `requireKeypairSigner`; identity-only callers can use any signer that exposes the required public identity.
+
 Current supported providers:
 - 1Password via `op://...`
 - macOS keychain via `keychain://...`
@@ -166,6 +170,8 @@ Security constraints:
 - Child processes receive a reduced environment rather than the full parent environment.
 
 ## Relayer Integration
+`src/submit.ts` owns configured submission. It validates the input and mode before adapter work, resolves the selected network, and dispatches to separate Channels and Stellar RPC adapters. The `submit` command still defaults to Channels, while `wallet create` can opt into `app.default_submit_mode` through its configured trigger.
+
 Default behavior:
 - `sign` is default workflow and returns signed XDR without submission.
 - `submit` is optional and explicit.
@@ -194,11 +200,13 @@ Submission methods:
 - x402 auto mode reuses one initial HTTP 402 response for channel handling and exact fallback. It does not send a second initial request.
 - Protocol selection comes from `--protocol` or `[payments].default_protocol`, with x402 as the compatibility default.
 - Payer selection is protocol-specific: x402 resolves from `--secret-ref` or `[payments.x402]`; MPP resolves from `--secret-ref` or `[payments.mpp]`.
-- Protocol-specific `max_payment_amount` settings set a payment cap unless `--yes` is passed.
+- `src/payment-amount-policy.ts` validates payment and cap grammar and compares amounts without `Number` conversion. `--yes` overrides only a valid cap excess; it never overrides malformed payment, deposit, or maximum values.
 - `--dry-run` returns the 402 challenge details without paying.
 - The canonical payment modes are x402 `exact`, x402 `channel`, MPP `charge`, and MPP `channel`.
 - MPP channel payments persist the latest voucher amount/signature locally so the CLI can top up, inspect, and close the active channel later.
 - `src/mpp-channel/execute.ts` owns MPP channel configuration, state selection, credential resolution, role checks, voucher selection, and action dispatch.
+- `src/mpp-channel/storage.ts` owns the lifecycle transition table and exact cumulative-amount monotonicity checks. It validates before RPC work and again before each local write. A first observed voucher can create a partial local record, but existing closing or terminal channels cannot reactivate.
+- State can change after preflight and before an RPC result. Write-time validation rejects the stale local write, but it cannot undo an on-chain transaction that already completed.
 - Current x402 and MPP network support is mapped from the standard Stellar testnet and mainnet passphrases only.
 
 ## Config Model (TOML)
